@@ -78,6 +78,13 @@ function NumarkMixTrackQuad() {}
 
 NumarkMixTrackQuad.init = function(id) {
 	NumarkMixTrackQuad.id = id;
+
+	// Read user settings from Mixxx preferences
+	NumarkMixTrackQuad.autoDJOnStartup = engine.getSetting("AutoDJOnStartup") !== "false";
+	NumarkMixTrackQuad.lightShowEnabled = engine.getSetting("LightShowEnabled") !== "false";
+	NumarkMixTrackQuad.idleTimeoutMinutes = parseInt(engine.getSetting("IdleTimeoutMinutes"), 10) || 1;
+	NumarkMixTrackQuad.clipIndicatorEnabled = engine.getSetting("ClipIndicatorEnabled") !== "false";
+
 	NumarkMixTrackQuad.directoryMode = false;
 	NumarkMixTrackQuad.scratchMode = [false, false];
 	NumarkMixTrackQuad.touch = [false, false];
@@ -107,10 +114,12 @@ NumarkMixTrackQuad.init = function(id) {
 		{ "directory": 0x4B, "file": 0x4C },
 	];
 	
-	engine.setValue('[Master]', 'gain', 0)
+	engine.setValue('[Main]', 'gain', 0)
 	engine.beginTimer(20, NumarkMixTrackQuad.shutdown, true);
 	engine.beginTimer(200, NumarkMixTrackQuad.peakIndicator, false);
-	engine.beginTimer(300, NumarkMixTrackQuad.lightShow , true);
+	if (NumarkMixTrackQuad.lightShowEnabled) {
+		engine.beginTimer(300, NumarkMixTrackQuad.lightShow , true);
+	}
 	engine.beginTimer(500, NumarkMixTrackQuad.buttonR1LoopLeds, false);
 	engine.beginTimer(500, NumarkMixTrackQuad.buttonR2LoopLeds, false);
 	engine.beginTimer(500, NumarkMixTrackQuad.buttonR3LoopLeds, false);
@@ -120,13 +129,20 @@ NumarkMixTrackQuad.init = function(id) {
 	engine.beginTimer(11200, () => { NumarkMixTrackQuad.autoDjLedFix('[Channel3]'); } , true);
 	engine.beginTimer(11300, () => { NumarkMixTrackQuad.autoDjLedFix('[Channel4]'); } , true);
 	engine.beginTimer(18000, () => { engine.setValue('[Library]', 'MoveDown', 1); } , true);
-	engine.beginTimer(25000, () => { engine.setValue('[AutoDJ]', 'enabled', 1); } , true);	// remove this line to remove autoDJ on startup
+	if (NumarkMixTrackQuad.autoDJOnStartup) {
+		engine.beginTimer(25000, () => { engine.setValue('[AutoDJ]', 'enabled', 1); } , true);
+	}
 	NumarkMixTrackQuad.volUpTimer = engine.beginTimer(25500, NumarkMixTrackQuad.MVolUp, true); // slow gain increase at the start 
 
 	engine.makeConnection("[Channel1]","beat_active",NumarkMixTrackQuad.sync1Led);
 	engine.makeConnection("[Channel2]","beat_active",NumarkMixTrackQuad.sync2Led);
 	engine.makeConnection("[Channel3]","beat_active",NumarkMixTrackQuad.sync3Led);
 	engine.makeConnection("[Channel4]","beat_active",NumarkMixTrackQuad.sync4Led);
+
+	engine.softTakeover('[Channel1]', 'gain', true);
+	engine.softTakeover('[Channel2]', 'gain', true);
+	engine.softTakeover('[Channel3]', 'gain', true);
+	engine.softTakeover('[Channel4]', 'gain', true);
 	
     NumarkMixTrackQuad.activeButtonsR1 = NumarkMixTrackQuad.unshiftedButtonsR1;
     NumarkMixTrackQuad.activeButtonsR2 = NumarkMixTrackQuad.unshiftedButtonsR2;
@@ -135,35 +151,28 @@ NumarkMixTrackQuad.init = function(id) {
 	
 }
 
-var volCnt = 0;
+let volCnt = 0;
 NumarkMixTrackQuad.MVolUp = function() { 
 	NumarkMixTrackQuad.volUpTimer = engine.beginTimer(250, NumarkMixTrackQuad.MVolUp, true); 
 	volCnt = volCnt + 0.01; 
 	if (volCnt > 1) { 
 		engine.stopTimer(NumarkMixTrackQuad.volUpTimer); 
 	} 
-	engine.setValue('[Master]', 'gain', volCnt);
+	engine.setValue('[Main]', 'gain', volCnt);
 }
 
 NumarkMixTrackQuad.gain = function(channel, control, value, status, group) {
 	NumarkMixTrackQuad.untouched = -1;
-	var curgain = engine.getValue(group, "gain");
-	if (value < 64) {
-		multiplier = 0.015625 * value ;
-		if (curgain - multiplier <= 0.15 && curgain - multiplier >= -0.15) {
-			engine.setValue(group, "gain", multiplier);
-		}
-	} else { 
-		multiplier = (0.0625 * (value-64)) + 1;
-		if (curgain - multiplier <= 0.75 && curgain - multiplier >= -0.75) {
-			engine.setValue(group, "gain", multiplier);
-		}
+	const target = value < 64 ? 0.015625 * value : (0.0625 * (value - 64)) + 1;
+	engine.setValue(group, "gain", target);
+	if (NumarkMixTrackQuad.volUpTimer) {
+		engine.stopTimer(NumarkMixTrackQuad.volUpTimer);
+		NumarkMixTrackQuad.volUpTimer = 0;
 	}
-	if (NumarkMixTrackQuad.volUpTimer) { engine.stopTimer(NumarkMixTrackQuad.volUpTimer); NumarkMixTrackQuad.volUpTimer = 0; }
 }
 
 NumarkMixTrackQuad.autoDjLedFix = function(group) {
-	var deck = NumarkMixTrackQuad.groupToDeck(group);
+	let deck = NumarkMixTrackQuad.groupToDeck(group);
 	if (group == '[Channel1]') {
 		NumarkMixTrackQuad.channel[deck-1] = 1;
 	}
@@ -187,7 +196,7 @@ NumarkMixTrackQuad.setLED = function(value, status) {
 }
 
 NumarkMixTrackQuad.groupToDeck = function(group) {
-	var matches = group.match(/^\[Channel(\d+)\]$/);
+	let matches = group.match(/^\[Channel(\d+)\]$/);
 	if (matches == null) {
 		return -1;
 	} else {
@@ -201,11 +210,11 @@ NumarkMixTrackQuad.selectKnob = function(channel, control, value, status, group)
 	}
 	if (NumarkMixTrackQuad.directoryMode) {
 		if (value > 0) {
-			for (var i = 0; i < value; i++) {
+			for (let i = 0; i < value; i++) {
 				engine.setValue(group, "SelectNextPlaylist", 1);
 			}
 		} else {
-			for (var i = 0; i < -value; i++) {
+			for (let i = 0; i < -value; i++) {
 				engine.setValue(group, "SelectPrevPlaylist", 1);
 			}
 		}
@@ -233,7 +242,7 @@ NumarkMixTrackQuad.flashOnceOn = function(deck, group) {
 NumarkMixTrackQuad.playbutton = function(channel, control, value, status, group) {
 	NumarkMixTrackQuad.untouched = -3;
 	if (!value) return;
-	var deck = NumarkMixTrackQuad.groupToDeck(group);
+	let deck = NumarkMixTrackQuad.groupToDeck(group);
 	if (!NumarkMixTrackQuad.jogled[deck-1]) {NumarkMixTrackQuad.jogled[deck-1] = 1;}
 	if (engine.getValue(group, "play")) {
 		engine.setValue(group, "play", 0);
@@ -248,7 +257,7 @@ NumarkMixTrackQuad.playbutton = function(channel, control, value, status, group)
 
 NumarkMixTrackQuad.reversebutton = function(channel, control, value, status, group) {
 	NumarkMixTrackQuad.untouched = -3;
-	var deck = NumarkMixTrackQuad.groupToDeck(group);
+	let deck = NumarkMixTrackQuad.groupToDeck(group);
 	if (engine.getValue(group, "play")) {
 		if (engine.getValue(group, "reverse")) {
 			engine.setValue(group, "reverse", 0);
@@ -258,7 +267,7 @@ NumarkMixTrackQuad.reversebutton = function(channel, control, value, status, gro
 			NumarkMixTrackQuad.reverse[deck-1] = -1;
 		}
 	}else{
-		if (engine.getValue(group, "reverse"), 1) {
+		if (engine.getValue(group, "reverse")) {
 			engine.setValue(group, "reverse", 0);
 		}
 	}
@@ -266,7 +275,7 @@ NumarkMixTrackQuad.reversebutton = function(channel, control, value, status, gro
 
 NumarkMixTrackQuad.cuebutton = function(channel, control, value, status, group) {	
 	NumarkMixTrackQuad.untouched = -3;
-	var deck = NumarkMixTrackQuad.groupToDeck(group);
+	let deck = NumarkMixTrackQuad.groupToDeck(group);
 	if (engine.getValue(group, "playposition") <= 0.97) {
 			engine.setValue(group, "cue_default", value ? 1 : 0);
 		if (engine.getValue(group, "reverse")) {
@@ -279,9 +288,9 @@ NumarkMixTrackQuad.cuebutton = function(channel, control, value, status, group) 
 
 NumarkMixTrackQuad.jogWheel = function(channel, control, value, status, group) {
 	NumarkMixTrackQuad.untouched = -3;
-	var deck = NumarkMixTrackQuad.groupToDeck(group);
-	var adjustedJog = parseFloat(value);
-	var posNeg = 1;
+	let deck = NumarkMixTrackQuad.groupToDeck(group);
+	let adjustedJog = parseFloat(value);
+	let posNeg = 1;
 	if (adjustedJog > 63) {
 		posNeg = -1;
 		adjustedJog = value - 128;
@@ -299,11 +308,11 @@ NumarkMixTrackQuad.jogWheel = function(channel, control, value, status, group) {
 	}
 	engine.scratchTick(deck, adjustedJog);
 	if (engine.getValue(group,"play")) {
-		var gammaInputRange = 13;
-		var maxOutFraction = 0.8;
-		var sensitivity = 0.5;
-		var gammaOutputRange = 2;
-		if (engine.getValue(group, "reverse"), 0) {
+		const gammaInputRange = 13;
+		const maxOutFraction = 0.8;
+		const sensitivity = 0.5;
+		const gammaOutputRange = 2;
+		if (!engine.getValue(group, "reverse")) {
 			adjustedJog = posNeg * gammaOutputRange * Math.pow(Math.abs(adjustedJog) / (gammaInputRange * maxOutFraction), sensitivity);
 		} else {
 			adjustedJog = posNeg * gammaOutputRange * Math.pow(Math.abs(adjustedJog) / (gammaInputRange * maxOutFraction), sensitivity) * -1;
@@ -320,13 +329,13 @@ NumarkMixTrackQuad.jogWheel = function(channel, control, value, status, group) {
 		} else {
 			if (NumarkMixTrackQuad.scratchTimer[deck-1]) { engine.stopTimer(NumarkMixTrackQuad.scratchTimer[deck-1]); }
 			NumarkMixTrackQuad.scratchTimer[deck-1] = engine.beginTimer(20, () => { NumarkMixTrackQuad.jogWheelStopScratch( deck, group ); }, true);
-			if ((posNeg < 0) && (engine.getValue(group, "reverse"), 0)) {
+			if ((posNeg < 0) && (!engine.getValue(group, "reverse"))) {
 				NumarkMixTrackQuad.reverse[deck-1] = -0.5;
-			} else if (engine.getValue(group, "reverse"), 0) {
+			} else if (!engine.getValue(group, "reverse")) {
 				NumarkMixTrackQuad.reverse[deck-1] = -1.15;
-			} else if ((posNeg > 0) && (engine.getValue(group, "reverse"), 1)) {
+			} else if ((posNeg > 0) && (engine.getValue(group, "reverse"))) {
 				NumarkMixTrackQuad.reverse[deck-1] = 1.15;
-			} else if (engine.getValue(group, "reverse"), 1) {
+			} else if (engine.getValue(group, "reverse")) {
 				NumarkMixTrackQuad.reverse[deck-1] = 0.5;
 			}		
 		}
@@ -336,13 +345,13 @@ NumarkMixTrackQuad.jogWheel = function(channel, control, value, status, group) {
 			} else {
 				if (NumarkMixTrackQuad.scratchTimer[deck-1]) { engine.stopTimer(NumarkMixTrackQuad.scratchTimer[deck-1]); }
 				NumarkMixTrackQuad.scratchTimer[deck-1] = engine.beginTimer(20, () => { NumarkMixTrackQuad.jogWheelStopScratch( deck, group ); }, true);
-				if ((posNeg < 0) && (engine.getValue(group, "reverse"), 0)) {
+				if ((posNeg < 0) && (!engine.getValue(group, "reverse"))) {
 					NumarkMixTrackQuad.reverse[deck-1] = -0.5;
-				} else if (engine.getValue(group, "reverse"), 0) {
+				} else if (!engine.getValue(group, "reverse")) {
 					NumarkMixTrackQuad.reverse[deck-1] = -1.15;
-				} else if ((posNeg > 0) && (engine.getValue(group, "reverse"), 1)) {
+				} else if ((posNeg > 0) && (engine.getValue(group, "reverse"))) {
 					NumarkMixTrackQuad.reverse[deck-1] = 1.15;
-				} else if (engine.getValue(group, "reverse"), 1) {
+				} else if (engine.getValue(group, "reverse")) {
 					NumarkMixTrackQuad.reverse[deck-1] = 0.5;
 				}						
 			}
@@ -368,7 +377,7 @@ NumarkMixTrackQuad.jogWheelStopScratch = function(deck, group) {
 				engine.beginTimer(1000, () => { engine.setValue( group, "slip_enabled", 1); }, true);
 			}
 		}
-		if (!engine.getValue(group, "reverse"), -1) {
+		if (!engine.getValue(group, "reverse")) {
 			NumarkMixTrackQuad.reverse[deck-1] = 1;
 		} else {
 			NumarkMixTrackQuad.reverse[deck-1] = -1;
@@ -380,7 +389,7 @@ NumarkMixTrackQuad.jogWheelStopScratch = function(deck, group) {
 
 NumarkMixTrackQuad.wheelTouch = function(channel, control, value, status, group){
 	NumarkMixTrackQuad.untouched = -3;
-	var deck = NumarkMixTrackQuad.groupToDeck(group);
+	let deck = NumarkMixTrackQuad.groupToDeck(group);
 	if(!value){
 		NumarkMixTrackQuad.touch[deck-1]= false;
 		if (NumarkMixTrackQuad.scratchTimer[deck-1]) { engine.stopTimer(NumarkMixTrackQuad.scratchTimer[deck-1]); }
@@ -435,7 +444,7 @@ NumarkMixTrackQuad.toggleScratchMode = function(channel, control, value, status,
 		}
 	} else {
 		if (!value) return;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		NumarkMixTrackQuad.scratchMode[deck-1] = !NumarkMixTrackQuad.scratchMode[deck-1];
 		if(NumarkMixTrackQuad.scratchMode[deck-1])
 		{
@@ -450,7 +459,7 @@ NumarkMixTrackQuad.toggleScratchMode = function(channel, control, value, status,
 
 NumarkMixTrackQuad.lightShow = function() {
 	NumarkMixTrackQuad.untouched = (NumarkMixTrackQuad.untouched + 1);
-	engine.beginTimer(60000, NumarkMixTrackQuad.lightShow, true);
+	engine.beginTimer(NumarkMixTrackQuad.idleTimeoutMinutes * 60000, NumarkMixTrackQuad.lightShow, true);
 	if (NumarkMixTrackQuad.untouched >= 1) {
 		NumarkMixTrackQuad.shutdown()
 
@@ -693,92 +702,92 @@ NumarkMixTrackQuad.lightShow = function() {
 		engine.beginTimer(900, () => { midi.sendShortMsg(0x94, 0x0D, 1); }, true);
 			
 		// Turns on FX1 LEDs
-		engine.beginTimer(1100, () => { NumarkMixTrackQuad.FX1a(); }, true); var cnt1 = 0; NumarkMixTrackQuad.FX1a = function() { colorTimer1 = engine.beginTimer(100, NumarkMixTrackQuad.FX1a, true); cnt1 = cnt1 + 1; if (cnt1 > 16) { engine.stopTimer(colorTimer1); }	midi.sendShortMsg(0x91, 0x59, cnt1);}
-		engine.beginTimer(1400, () => { NumarkMixTrackQuad.FX1b(); }, true); var cnt2 = 0; NumarkMixTrackQuad.FX1b = function() { colorTimer2 = engine.beginTimer(100, NumarkMixTrackQuad.FX1b, true); cnt2 = cnt2 + 1; if (cnt2 > 16) { engine.stopTimer(colorTimer2); } midi.sendShortMsg(0x92, 0x59, cnt2);}
-		engine.beginTimer(1100, () => { NumarkMixTrackQuad.FX1c(); }, true); var cnt3 = 0; NumarkMixTrackQuad.FX1c = function() { colorTimer3 = engine.beginTimer(100, NumarkMixTrackQuad.FX1c, true); cnt3 = cnt3 + 1; if (cnt3 > 16) { engine.stopTimer(colorTimer3); } midi.sendShortMsg(0x93, 0x59, cnt3);}
-		engine.beginTimer(1400, () => { NumarkMixTrackQuad.FX1d(); }, true); var cnt4 = 0; NumarkMixTrackQuad.FX1d = function() { colorTimer4 = engine.beginTimer(100, NumarkMixTrackQuad.FX1d, true); cnt4 = cnt4 + 1; if (cnt4 > 16) { engine.stopTimer(colorTimer4); } midi.sendShortMsg(0x94, 0x59, cnt4);}
+		engine.beginTimer(1100, () => { NumarkMixTrackQuad.FX1a(); }, true); let cnt1 = 0; NumarkMixTrackQuad.FX1a = function() { colorTimer1 = engine.beginTimer(100, NumarkMixTrackQuad.FX1a, true); cnt1 = cnt1 + 1; if (cnt1 > 16) { engine.stopTimer(colorTimer1); }	midi.sendShortMsg(0x91, 0x59, cnt1);}
+		engine.beginTimer(1400, () => { NumarkMixTrackQuad.FX1b(); }, true); let cnt2 = 0; NumarkMixTrackQuad.FX1b = function() { colorTimer2 = engine.beginTimer(100, NumarkMixTrackQuad.FX1b, true); cnt2 = cnt2 + 1; if (cnt2 > 16) { engine.stopTimer(colorTimer2); } midi.sendShortMsg(0x92, 0x59, cnt2);}
+		engine.beginTimer(1100, () => { NumarkMixTrackQuad.FX1c(); }, true); let cnt3 = 0; NumarkMixTrackQuad.FX1c = function() { colorTimer3 = engine.beginTimer(100, NumarkMixTrackQuad.FX1c, true); cnt3 = cnt3 + 1; if (cnt3 > 16) { engine.stopTimer(colorTimer3); } midi.sendShortMsg(0x93, 0x59, cnt3);}
+		engine.beginTimer(1400, () => { NumarkMixTrackQuad.FX1d(); }, true); let cnt4 = 0; NumarkMixTrackQuad.FX1d = function() { colorTimer4 = engine.beginTimer(100, NumarkMixTrackQuad.FX1d, true); cnt4 = cnt4 + 1; if (cnt4 > 16) { engine.stopTimer(colorTimer4); } midi.sendShortMsg(0x94, 0x59, cnt4);}
 
 		// Turns on FX2 LEDs
-		engine.beginTimer(1200, () => { NumarkMixTrackQuad.FX2a(); }, true); var cnt5 = 0; NumarkMixTrackQuad.FX2a = function() { colorTimer5 = engine.beginTimer(100, NumarkMixTrackQuad.FX2a, true); cnt5 = cnt5 + 1; if (cnt5 > 16) { engine.stopTimer(colorTimer5); } midi.sendShortMsg(0x91, 0x5A, cnt5);}
-		engine.beginTimer(1300, () => { NumarkMixTrackQuad.FX2b(); }, true); var cnt6 = 0; NumarkMixTrackQuad.FX2b = function() { colorTimer6 = engine.beginTimer(100, NumarkMixTrackQuad.FX2b, true); cnt6 = cnt6 + 1; if (cnt6 > 16) { engine.stopTimer(colorTimer6); } midi.sendShortMsg(0x92, 0x5A, cnt6);}
-		engine.beginTimer(1200, () => { NumarkMixTrackQuad.FX2c(); }, true); var cnt7 = 0; NumarkMixTrackQuad.FX2c = function() { colorTimer7 = engine.beginTimer(100, NumarkMixTrackQuad.FX2c, true); cnt7 = cnt7 + 1; if (cnt7 > 16) { engine.stopTimer(colorTimer7); } midi.sendShortMsg(0x93, 0x5A, cnt7);}
-		engine.beginTimer(1300, () => { NumarkMixTrackQuad.FX2d(); }, true); var cnt8 = 0; NumarkMixTrackQuad.FX2d = function() { colorTimer8 = engine.beginTimer(100, NumarkMixTrackQuad.FX2d, true); cnt8 = cnt8 + 1; if (cnt8 > 16) { engine.stopTimer(colorTimer8); } midi.sendShortMsg(0x94, 0x5A, cnt8);}
+		engine.beginTimer(1200, () => { NumarkMixTrackQuad.FX2a(); }, true); let cnt5 = 0; NumarkMixTrackQuad.FX2a = function() { colorTimer5 = engine.beginTimer(100, NumarkMixTrackQuad.FX2a, true); cnt5 = cnt5 + 1; if (cnt5 > 16) { engine.stopTimer(colorTimer5); } midi.sendShortMsg(0x91, 0x5A, cnt5);}
+		engine.beginTimer(1300, () => { NumarkMixTrackQuad.FX2b(); }, true); let cnt6 = 0; NumarkMixTrackQuad.FX2b = function() { colorTimer6 = engine.beginTimer(100, NumarkMixTrackQuad.FX2b, true); cnt6 = cnt6 + 1; if (cnt6 > 16) { engine.stopTimer(colorTimer6); } midi.sendShortMsg(0x92, 0x5A, cnt6);}
+		engine.beginTimer(1200, () => { NumarkMixTrackQuad.FX2c(); }, true); let cnt7 = 0; NumarkMixTrackQuad.FX2c = function() { colorTimer7 = engine.beginTimer(100, NumarkMixTrackQuad.FX2c, true); cnt7 = cnt7 + 1; if (cnt7 > 16) { engine.stopTimer(colorTimer7); } midi.sendShortMsg(0x93, 0x5A, cnt7);}
+		engine.beginTimer(1300, () => { NumarkMixTrackQuad.FX2d(); }, true); let cnt8 = 0; NumarkMixTrackQuad.FX2d = function() { colorTimer8 = engine.beginTimer(100, NumarkMixTrackQuad.FX2d, true); cnt8 = cnt8 + 1; if (cnt8 > 16) { engine.stopTimer(colorTimer8); } midi.sendShortMsg(0x94, 0x5A, cnt8);}
 
 		// Turns on FX3 LEDs
-		engine.beginTimer(1300, () => { NumarkMixTrackQuad.FX3a(); }, true); var cnt9 = 0; NumarkMixTrackQuad.FX3a = function() { colorTimer9 = engine.beginTimer(100, NumarkMixTrackQuad.FX3a, true); cnt9 = cnt9 + 1; if (cnt9 > 16) { engine.stopTimer(colorTimer9); } midi.sendShortMsg(0x91, 0x5B, cnt9);}
-		engine.beginTimer(1200, () => { NumarkMixTrackQuad.FX3b(); }, true); var cnt10 = 0; NumarkMixTrackQuad.FX3b = function() { colorTimer10 = engine.beginTimer(100, NumarkMixTrackQuad.FX3b, true); cnt10 = cnt10 + 1; if (cnt10 > 16) { engine.stopTimer(colorTimer10); } midi.sendShortMsg(0x92, 0x5B, cnt10);}
-		engine.beginTimer(1300, () => { NumarkMixTrackQuad.FX3c(); }, true); var cnt11 = 0; NumarkMixTrackQuad.FX3c = function() { colorTimer11 = engine.beginTimer(100, NumarkMixTrackQuad.FX3c, true); cnt11 = cnt11 + 1; if (cnt11 > 16) { engine.stopTimer(colorTimer11); } midi.sendShortMsg(0x93, 0x5B, cnt11);}
-		engine.beginTimer(1200, () => { NumarkMixTrackQuad.FX3d(); }, true); var cnt12 = 0; NumarkMixTrackQuad.FX3d = function() { colorTimer12 = engine.beginTimer(100, NumarkMixTrackQuad.FX3d, true); cnt12 = cnt12 + 1; if (cnt12 > 16) { engine.stopTimer(colorTimer12); } midi.sendShortMsg(0x94, 0x5B, cnt12);}
+		engine.beginTimer(1300, () => { NumarkMixTrackQuad.FX3a(); }, true); let cnt9 = 0; NumarkMixTrackQuad.FX3a = function() { colorTimer9 = engine.beginTimer(100, NumarkMixTrackQuad.FX3a, true); cnt9 = cnt9 + 1; if (cnt9 > 16) { engine.stopTimer(colorTimer9); } midi.sendShortMsg(0x91, 0x5B, cnt9);}
+		engine.beginTimer(1200, () => { NumarkMixTrackQuad.FX3b(); }, true); let cnt10 = 0; NumarkMixTrackQuad.FX3b = function() { colorTimer10 = engine.beginTimer(100, NumarkMixTrackQuad.FX3b, true); cnt10 = cnt10 + 1; if (cnt10 > 16) { engine.stopTimer(colorTimer10); } midi.sendShortMsg(0x92, 0x5B, cnt10);}
+		engine.beginTimer(1300, () => { NumarkMixTrackQuad.FX3c(); }, true); let cnt11 = 0; NumarkMixTrackQuad.FX3c = function() { colorTimer11 = engine.beginTimer(100, NumarkMixTrackQuad.FX3c, true); cnt11 = cnt11 + 1; if (cnt11 > 16) { engine.stopTimer(colorTimer11); } midi.sendShortMsg(0x93, 0x5B, cnt11);}
+		engine.beginTimer(1200, () => { NumarkMixTrackQuad.FX3d(); }, true); let cnt12 = 0; NumarkMixTrackQuad.FX3d = function() { colorTimer12 = engine.beginTimer(100, NumarkMixTrackQuad.FX3d, true); cnt12 = cnt12 + 1; if (cnt12 > 16) { engine.stopTimer(colorTimer12); } midi.sendShortMsg(0x94, 0x5B, cnt12);}
 
 		// Turns on Reset LEDs
-		engine.beginTimer(1400, () => { NumarkMixTrackQuad.RLEDsa(); }, true); var cnt13 = 0; NumarkMixTrackQuad.RLEDsa = function() { colorTimer13 = engine.beginTimer(100, NumarkMixTrackQuad.RLEDsa, true); cnt13 = cnt13 + 1; if (cnt13 > 16) { engine.stopTimer(colorTimer13); } midi.sendShortMsg(0x91, 0x5C, cnt13);}
-		engine.beginTimer(1100, () => { NumarkMixTrackQuad.RLEDsb(); }, true); var cnt14 = 0; NumarkMixTrackQuad.RLEDsb = function() { colorTimer14 = engine.beginTimer(100, NumarkMixTrackQuad.RLEDsb, true); cnt14 = cnt14 + 1; if (cnt14 > 16) { engine.stopTimer(colorTimer14); } midi.sendShortMsg(0x92, 0x5C, cnt14);}
-		engine.beginTimer(1400, () => { NumarkMixTrackQuad.RLEDsc(); }, true); var cnt15 = 0; NumarkMixTrackQuad.RLEDsc = function() { colorTimer15 = engine.beginTimer(100, NumarkMixTrackQuad.RLEDsc, true); cnt15 = cnt15 + 1; if (cnt15 > 16) { engine.stopTimer(colorTimer15); } midi.sendShortMsg(0x93, 0x5C, cnt15);}
-		engine.beginTimer(1100, () => { NumarkMixTrackQuad.RLEDsd(); }, true); var cnt16 = 0; NumarkMixTrackQuad.RLEDsd = function() { colorTimer16 = engine.beginTimer(100, NumarkMixTrackQuad.RLEDsd, true); cnt16 = cnt16 + 1; if (cnt16 > 16) { engine.stopTimer(colorTimer16); } midi.sendShortMsg(0x94, 0x5C, cnt16);}
+		engine.beginTimer(1400, () => { NumarkMixTrackQuad.RLEDsa(); }, true); let cnt13 = 0; NumarkMixTrackQuad.RLEDsa = function() { colorTimer13 = engine.beginTimer(100, NumarkMixTrackQuad.RLEDsa, true); cnt13 = cnt13 + 1; if (cnt13 > 16) { engine.stopTimer(colorTimer13); } midi.sendShortMsg(0x91, 0x5C, cnt13);}
+		engine.beginTimer(1100, () => { NumarkMixTrackQuad.RLEDsb(); }, true); let cnt14 = 0; NumarkMixTrackQuad.RLEDsb = function() { colorTimer14 = engine.beginTimer(100, NumarkMixTrackQuad.RLEDsb, true); cnt14 = cnt14 + 1; if (cnt14 > 16) { engine.stopTimer(colorTimer14); } midi.sendShortMsg(0x92, 0x5C, cnt14);}
+		engine.beginTimer(1400, () => { NumarkMixTrackQuad.RLEDsc(); }, true); let cnt15 = 0; NumarkMixTrackQuad.RLEDsc = function() { colorTimer15 = engine.beginTimer(100, NumarkMixTrackQuad.RLEDsc, true); cnt15 = cnt15 + 1; if (cnt15 > 16) { engine.stopTimer(colorTimer15); } midi.sendShortMsg(0x93, 0x5C, cnt15);}
+		engine.beginTimer(1100, () => { NumarkMixTrackQuad.RLEDsd(); }, true); let cnt16 = 0; NumarkMixTrackQuad.RLEDsd = function() { colorTimer16 = engine.beginTimer(100, NumarkMixTrackQuad.RLEDsd, true); cnt16 = cnt16 + 1; if (cnt16 > 16) { engine.stopTimer(colorTimer16); } midi.sendShortMsg(0x94, 0x5C, cnt16);}
 
 		// Turns on Loop_IN LEDs lvl1
-		engine.beginTimer(1000, () => { NumarkMixTrackQuad.LILEDsa1(); }, true); var cnt171 = 0; NumarkMixTrackQuad.LILEDsa1 = function() { colorTimer171 = engine.beginTimer(100, NumarkMixTrackQuad.LILEDsa1, true); cnt171 = cnt171 + 1; if (cnt171 > 16) { engine.stopTimer(colorTimer171); } midi.sendShortMsg(0x91, 0x53, cnt171);}
-		engine.beginTimer(1300, () => { NumarkMixTrackQuad.LILEDsb1(); }, true); var cnt181 = 0; NumarkMixTrackQuad.LILEDsb1 = function() { colorTimer181 = engine.beginTimer(100, NumarkMixTrackQuad.LILEDsb1, true); cnt181 = cnt181 + 1; if (cnt181 > 16) { engine.stopTimer(colorTimer181); } midi.sendShortMsg(0x92, 0x53, cnt181);}
-		engine.beginTimer(1000, () => { NumarkMixTrackQuad.LILEDsc1(); }, true); var cnt191 = 0; NumarkMixTrackQuad.LILEDsc1 = function() { colorTimer191 = engine.beginTimer(100, NumarkMixTrackQuad.LILEDsc1, true); cnt191 = cnt191 + 1; if (cnt191 > 16) { engine.stopTimer(colorTimer191); } midi.sendShortMsg(0x93, 0x53, cnt191);}
-		engine.beginTimer(1300, () => { NumarkMixTrackQuad.LILEDsd1(); }, true); var cnt201 = 0; NumarkMixTrackQuad.LILEDsd1 = function() { colorTimer201 = engine.beginTimer(100, NumarkMixTrackQuad.LILEDsd1, true); cnt201 = cnt201 + 1; if (cnt201 > 16) { engine.stopTimer(colorTimer201); } midi.sendShortMsg(0x94, 0x53, cnt201);}
+		engine.beginTimer(1000, () => { NumarkMixTrackQuad.LILEDsa1(); }, true); let cnt171 = 0; NumarkMixTrackQuad.LILEDsa1 = function() { colorTimer171 = engine.beginTimer(100, NumarkMixTrackQuad.LILEDsa1, true); cnt171 = cnt171 + 1; if (cnt171 > 16) { engine.stopTimer(colorTimer171); } midi.sendShortMsg(0x91, 0x53, cnt171);}
+		engine.beginTimer(1300, () => { NumarkMixTrackQuad.LILEDsb1(); }, true); let cnt181 = 0; NumarkMixTrackQuad.LILEDsb1 = function() { colorTimer181 = engine.beginTimer(100, NumarkMixTrackQuad.LILEDsb1, true); cnt181 = cnt181 + 1; if (cnt181 > 16) { engine.stopTimer(colorTimer181); } midi.sendShortMsg(0x92, 0x53, cnt181);}
+		engine.beginTimer(1000, () => { NumarkMixTrackQuad.LILEDsc1(); }, true); let cnt191 = 0; NumarkMixTrackQuad.LILEDsc1 = function() { colorTimer191 = engine.beginTimer(100, NumarkMixTrackQuad.LILEDsc1, true); cnt191 = cnt191 + 1; if (cnt191 > 16) { engine.stopTimer(colorTimer191); } midi.sendShortMsg(0x93, 0x53, cnt191);}
+		engine.beginTimer(1300, () => { NumarkMixTrackQuad.LILEDsd1(); }, true); let cnt201 = 0; NumarkMixTrackQuad.LILEDsd1 = function() { colorTimer201 = engine.beginTimer(100, NumarkMixTrackQuad.LILEDsd1, true); cnt201 = cnt201 + 1; if (cnt201 > 16) { engine.stopTimer(colorTimer201); } midi.sendShortMsg(0x94, 0x53, cnt201);}
 		// Turns on Loop_IN LEDs lvl2 S1
-		engine.beginTimer(1000, () => { NumarkMixTrackQuad.LILEDsa2(); }, true); var cnt172 = 0; NumarkMixTrackQuad.LILEDsa2 = function() { colorTimer172 = engine.beginTimer(100, NumarkMixTrackQuad.LILEDsa2, true); cnt172 = cnt172 + 1; if (cnt172 > 16) { engine.stopTimer(colorTimer172); } midi.sendShortMsg(0x91, 0x65, cnt172);}
-		engine.beginTimer(1300, () => { NumarkMixTrackQuad.LILEDsb2(); }, true); var cnt182 = 0; NumarkMixTrackQuad.LILEDsb2 = function() { colorTimer182 = engine.beginTimer(100, NumarkMixTrackQuad.LILEDsb2, true); cnt182 = cnt182 + 1; if (cnt182 > 16) { engine.stopTimer(colorTimer182); } midi.sendShortMsg(0x92, 0x65, cnt182);}
-		engine.beginTimer(1000, () => { NumarkMixTrackQuad.LILEDsc2(); }, true); var cnt192 = 0; NumarkMixTrackQuad.LILEDsc2 = function() { colorTimer192 = engine.beginTimer(100, NumarkMixTrackQuad.LILEDsc2, true); cnt192 = cnt192 + 1; if (cnt192 > 16) { engine.stopTimer(colorTimer192); } midi.sendShortMsg(0x93, 0x65, cnt192);}
-		engine.beginTimer(1300, () => { NumarkMixTrackQuad.LILEDsd2(); }, true); var cnt202 = 0; NumarkMixTrackQuad.LILEDsd2 = function() { colorTimer202 = engine.beginTimer(100, NumarkMixTrackQuad.LILEDsd2, true); cnt202 = cnt202 + 1; if (cnt202 > 16) { engine.stopTimer(colorTimer202); } midi.sendShortMsg(0x94, 0x65, cnt202);}
+		engine.beginTimer(1000, () => { NumarkMixTrackQuad.LILEDsa2(); }, true); let cnt172 = 0; NumarkMixTrackQuad.LILEDsa2 = function() { colorTimer172 = engine.beginTimer(100, NumarkMixTrackQuad.LILEDsa2, true); cnt172 = cnt172 + 1; if (cnt172 > 16) { engine.stopTimer(colorTimer172); } midi.sendShortMsg(0x91, 0x65, cnt172);}
+		engine.beginTimer(1300, () => { NumarkMixTrackQuad.LILEDsb2(); }, true); let cnt182 = 0; NumarkMixTrackQuad.LILEDsb2 = function() { colorTimer182 = engine.beginTimer(100, NumarkMixTrackQuad.LILEDsb2, true); cnt182 = cnt182 + 1; if (cnt182 > 16) { engine.stopTimer(colorTimer182); } midi.sendShortMsg(0x92, 0x65, cnt182);}
+		engine.beginTimer(1000, () => { NumarkMixTrackQuad.LILEDsc2(); }, true); let cnt192 = 0; NumarkMixTrackQuad.LILEDsc2 = function() { colorTimer192 = engine.beginTimer(100, NumarkMixTrackQuad.LILEDsc2, true); cnt192 = cnt192 + 1; if (cnt192 > 16) { engine.stopTimer(colorTimer192); } midi.sendShortMsg(0x93, 0x65, cnt192);}
+		engine.beginTimer(1300, () => { NumarkMixTrackQuad.LILEDsd2(); }, true); let cnt202 = 0; NumarkMixTrackQuad.LILEDsd2 = function() { colorTimer202 = engine.beginTimer(100, NumarkMixTrackQuad.LILEDsd2, true); cnt202 = cnt202 + 1; if (cnt202 > 16) { engine.stopTimer(colorTimer202); } midi.sendShortMsg(0x94, 0x65, cnt202);}
 		// Turns on Loop_IN LEDs lvl3 C1
-		engine.beginTimer(1000, () => { NumarkMixTrackQuad.LILEDsa3(); }, true); var cnt173 = 0; NumarkMixTrackQuad.LILEDsa3 = function() { colorTimer173 = engine.beginTimer(100, NumarkMixTrackQuad.LILEDsa3, true); cnt173 = cnt173 + 1; if (cnt173 > 16) { engine.stopTimer(colorTimer173); } midi.sendShortMsg(0x91, 0x6D, cnt173);}
-		engine.beginTimer(1300, () => { NumarkMixTrackQuad.LILEDsb3(); }, true); var cnt183 = 0; NumarkMixTrackQuad.LILEDsb3 = function() { colorTimer183 = engine.beginTimer(100, NumarkMixTrackQuad.LILEDsb3, true); cnt183 = cnt183 + 1; if (cnt183 > 16) { engine.stopTimer(colorTimer183); } midi.sendShortMsg(0x92, 0x6D, cnt183);}
-		engine.beginTimer(1000, () => { NumarkMixTrackQuad.LILEDsc3(); }, true); var cnt193 = 0; NumarkMixTrackQuad.LILEDsc3 = function() { colorTimer193 = engine.beginTimer(100, NumarkMixTrackQuad.LILEDsc3, true); cnt193 = cnt193 + 1; if (cnt193 > 16) { engine.stopTimer(colorTimer193); } midi.sendShortMsg(0x93, 0x6D, cnt193);}
-		engine.beginTimer(1300, () => { NumarkMixTrackQuad.LILEDsd3(); }, true); var cnt203 = 0; NumarkMixTrackQuad.LILEDsd3 = function() { colorTimer203 = engine.beginTimer(100, NumarkMixTrackQuad.LILEDsd3, true); cnt203 = cnt203 + 1; if (cnt203 > 16) { engine.stopTimer(colorTimer203); } midi.sendShortMsg(0x94, 0x6D, cnt203);}
+		engine.beginTimer(1000, () => { NumarkMixTrackQuad.LILEDsa3(); }, true); let cnt173 = 0; NumarkMixTrackQuad.LILEDsa3 = function() { colorTimer173 = engine.beginTimer(100, NumarkMixTrackQuad.LILEDsa3, true); cnt173 = cnt173 + 1; if (cnt173 > 16) { engine.stopTimer(colorTimer173); } midi.sendShortMsg(0x91, 0x6D, cnt173);}
+		engine.beginTimer(1300, () => { NumarkMixTrackQuad.LILEDsb3(); }, true); let cnt183 = 0; NumarkMixTrackQuad.LILEDsb3 = function() { colorTimer183 = engine.beginTimer(100, NumarkMixTrackQuad.LILEDsb3, true); cnt183 = cnt183 + 1; if (cnt183 > 16) { engine.stopTimer(colorTimer183); } midi.sendShortMsg(0x92, 0x6D, cnt183);}
+		engine.beginTimer(1000, () => { NumarkMixTrackQuad.LILEDsc3(); }, true); let cnt193 = 0; NumarkMixTrackQuad.LILEDsc3 = function() { colorTimer193 = engine.beginTimer(100, NumarkMixTrackQuad.LILEDsc3, true); cnt193 = cnt193 + 1; if (cnt193 > 16) { engine.stopTimer(colorTimer193); } midi.sendShortMsg(0x93, 0x6D, cnt193);}
+		engine.beginTimer(1300, () => { NumarkMixTrackQuad.LILEDsd3(); }, true); let cnt203 = 0; NumarkMixTrackQuad.LILEDsd3 = function() { colorTimer203 = engine.beginTimer(100, NumarkMixTrackQuad.LILEDsd3, true); cnt203 = cnt203 + 1; if (cnt203 > 16) { engine.stopTimer(colorTimer203); } midi.sendShortMsg(0x94, 0x6D, cnt203);}
 
 		// Turns on Loop_OUT LEDs lvl1
-		engine.beginTimer(1100, () => { NumarkMixTrackQuad.LOLEDsa1(); }, true); var cnt211 = 0; NumarkMixTrackQuad.LOLEDsa1 = function() { colorTimer211 = engine.beginTimer(100, NumarkMixTrackQuad.LOLEDsa1, true); cnt211 = cnt211 + 1; if (cnt211 > 16) { engine.stopTimer(colorTimer211); } midi.sendShortMsg(0x91, 0x54, cnt211);}
-		engine.beginTimer(1200, () => { NumarkMixTrackQuad.LOLEDsb1(); }, true); var cnt221 = 0; NumarkMixTrackQuad.LOLEDsb1 = function() { colorTimer221 = engine.beginTimer(100, NumarkMixTrackQuad.LOLEDsb1, true); cnt221 = cnt221 + 1; if (cnt221 > 16) { engine.stopTimer(colorTimer221); } midi.sendShortMsg(0x92, 0x54, cnt221);}
-		engine.beginTimer(1100, () => { NumarkMixTrackQuad.LOLEDsc1(); }, true); var cnt231 = 0; NumarkMixTrackQuad.LOLEDsc1 = function() { colorTimer231 = engine.beginTimer(100, NumarkMixTrackQuad.LOLEDsc1, true); cnt231 = cnt231 + 1; if (cnt231 > 16) { engine.stopTimer(colorTimer231); } midi.sendShortMsg(0x93, 0x54, cnt231);}
-		engine.beginTimer(1200, () => { NumarkMixTrackQuad.LOLEDsd1(); }, true); var cnt241 = 0; NumarkMixTrackQuad.LOLEDsd1 = function() { colorTimer241 = engine.beginTimer(100, NumarkMixTrackQuad.LOLEDsd1, true); cnt241 = cnt241 + 1; if (cnt241 > 16) { engine.stopTimer(colorTimer241); } midi.sendShortMsg(0x94, 0x54, cnt241);}
+		engine.beginTimer(1100, () => { NumarkMixTrackQuad.LOLEDsa1(); }, true); let cnt211 = 0; NumarkMixTrackQuad.LOLEDsa1 = function() { colorTimer211 = engine.beginTimer(100, NumarkMixTrackQuad.LOLEDsa1, true); cnt211 = cnt211 + 1; if (cnt211 > 16) { engine.stopTimer(colorTimer211); } midi.sendShortMsg(0x91, 0x54, cnt211);}
+		engine.beginTimer(1200, () => { NumarkMixTrackQuad.LOLEDsb1(); }, true); let cnt221 = 0; NumarkMixTrackQuad.LOLEDsb1 = function() { colorTimer221 = engine.beginTimer(100, NumarkMixTrackQuad.LOLEDsb1, true); cnt221 = cnt221 + 1; if (cnt221 > 16) { engine.stopTimer(colorTimer221); } midi.sendShortMsg(0x92, 0x54, cnt221);}
+		engine.beginTimer(1100, () => { NumarkMixTrackQuad.LOLEDsc1(); }, true); let cnt231 = 0; NumarkMixTrackQuad.LOLEDsc1 = function() { colorTimer231 = engine.beginTimer(100, NumarkMixTrackQuad.LOLEDsc1, true); cnt231 = cnt231 + 1; if (cnt231 > 16) { engine.stopTimer(colorTimer231); } midi.sendShortMsg(0x93, 0x54, cnt231);}
+		engine.beginTimer(1200, () => { NumarkMixTrackQuad.LOLEDsd1(); }, true); let cnt241 = 0; NumarkMixTrackQuad.LOLEDsd1 = function() { colorTimer241 = engine.beginTimer(100, NumarkMixTrackQuad.LOLEDsd1, true); cnt241 = cnt241 + 1; if (cnt241 > 16) { engine.stopTimer(colorTimer241); } midi.sendShortMsg(0x94, 0x54, cnt241);}
 		// Turns on Loop_OUT LEDs lvl2 S2
-		engine.beginTimer(1100, () => { NumarkMixTrackQuad.LOLEDsa2(); }, true); var cnt212 = 0; NumarkMixTrackQuad.LOLEDsa2 = function() { colorTimer212 = engine.beginTimer(100, NumarkMixTrackQuad.LOLEDsa2, true); cnt212 = cnt212 + 1; if (cnt212 > 16) { engine.stopTimer(colorTimer212); } midi.sendShortMsg(0x91, 0x66, cnt212);}
-		engine.beginTimer(1200, () => { NumarkMixTrackQuad.LOLEDsb2(); }, true); var cnt222 = 0; NumarkMixTrackQuad.LOLEDsb2 = function() { colorTimer222 = engine.beginTimer(100, NumarkMixTrackQuad.LOLEDsb2, true); cnt222 = cnt222 + 1; if (cnt222 > 16) { engine.stopTimer(colorTimer222); } midi.sendShortMsg(0x92, 0x66, cnt222);}
-		engine.beginTimer(1100, () => { NumarkMixTrackQuad.LOLEDsc2(); }, true); var cnt232 = 0; NumarkMixTrackQuad.LOLEDsc2 = function() { colorTimer232 = engine.beginTimer(100, NumarkMixTrackQuad.LOLEDsc2, true); cnt232 = cnt232 + 1; if (cnt232 > 16) { engine.stopTimer(colorTimer232); } midi.sendShortMsg(0x93, 0x66, cnt232);}
-		engine.beginTimer(1200, () => { NumarkMixTrackQuad.LOLEDsd2(); }, true); var cnt242 = 0; NumarkMixTrackQuad.LOLEDsd2 = function() { colorTimer242 = engine.beginTimer(100, NumarkMixTrackQuad.LOLEDsd2, true); cnt242 = cnt242 + 1; if (cnt242 > 16) { engine.stopTimer(colorTimer242); } midi.sendShortMsg(0x94, 0x66, cnt242);}
+		engine.beginTimer(1100, () => { NumarkMixTrackQuad.LOLEDsa2(); }, true); let cnt212 = 0; NumarkMixTrackQuad.LOLEDsa2 = function() { colorTimer212 = engine.beginTimer(100, NumarkMixTrackQuad.LOLEDsa2, true); cnt212 = cnt212 + 1; if (cnt212 > 16) { engine.stopTimer(colorTimer212); } midi.sendShortMsg(0x91, 0x66, cnt212);}
+		engine.beginTimer(1200, () => { NumarkMixTrackQuad.LOLEDsb2(); }, true); let cnt222 = 0; NumarkMixTrackQuad.LOLEDsb2 = function() { colorTimer222 = engine.beginTimer(100, NumarkMixTrackQuad.LOLEDsb2, true); cnt222 = cnt222 + 1; if (cnt222 > 16) { engine.stopTimer(colorTimer222); } midi.sendShortMsg(0x92, 0x66, cnt222);}
+		engine.beginTimer(1100, () => { NumarkMixTrackQuad.LOLEDsc2(); }, true); let cnt232 = 0; NumarkMixTrackQuad.LOLEDsc2 = function() { colorTimer232 = engine.beginTimer(100, NumarkMixTrackQuad.LOLEDsc2, true); cnt232 = cnt232 + 1; if (cnt232 > 16) { engine.stopTimer(colorTimer232); } midi.sendShortMsg(0x93, 0x66, cnt232);}
+		engine.beginTimer(1200, () => { NumarkMixTrackQuad.LOLEDsd2(); }, true); let cnt242 = 0; NumarkMixTrackQuad.LOLEDsd2 = function() { colorTimer242 = engine.beginTimer(100, NumarkMixTrackQuad.LOLEDsd2, true); cnt242 = cnt242 + 1; if (cnt242 > 16) { engine.stopTimer(colorTimer242); } midi.sendShortMsg(0x94, 0x66, cnt242);}
 		// Turns on Loop_OUT LEDs lvl3 C2
-		engine.beginTimer(1100, () => { NumarkMixTrackQuad.LOLEDsa3(); }, true); var cnt213 = 0; NumarkMixTrackQuad.LOLEDsa3 = function() { colorTimer213 = engine.beginTimer(100, NumarkMixTrackQuad.LOLEDsa3, true); cnt213 = cnt213 + 1; if (cnt213 > 16) { engine.stopTimer(colorTimer213); } midi.sendShortMsg(0x91, 0x6E, cnt213);}
-		engine.beginTimer(1200, () => { NumarkMixTrackQuad.LOLEDsb3(); }, true); var cnt223 = 0; NumarkMixTrackQuad.LOLEDsb3 = function() { colorTimer223 = engine.beginTimer(100, NumarkMixTrackQuad.LOLEDsb3, true); cnt223 = cnt223 + 1; if (cnt223 > 16) { engine.stopTimer(colorTimer223); } midi.sendShortMsg(0x92, 0x6E, cnt223);}
-		engine.beginTimer(1100, () => { NumarkMixTrackQuad.LOLEDsc3(); }, true); var cnt233 = 0; NumarkMixTrackQuad.LOLEDsc3 = function() { colorTimer233 = engine.beginTimer(100, NumarkMixTrackQuad.LOLEDsc3, true); cnt233 = cnt233 + 1; if (cnt233 > 16) { engine.stopTimer(colorTimer233); } midi.sendShortMsg(0x93, 0x6E, cnt233);}
-		engine.beginTimer(1200, () => { NumarkMixTrackQuad.LOLEDsd3(); }, true); var cnt243 = 0; NumarkMixTrackQuad.LOLEDsd3 = function() { colorTimer243 = engine.beginTimer(100, NumarkMixTrackQuad.LOLEDsd3, true); cnt243 = cnt243 + 1; if (cnt243 > 16) { engine.stopTimer(colorTimer243); } midi.sendShortMsg(0x94, 0x6E, cnt243);}
+		engine.beginTimer(1100, () => { NumarkMixTrackQuad.LOLEDsa3(); }, true); let cnt213 = 0; NumarkMixTrackQuad.LOLEDsa3 = function() { colorTimer213 = engine.beginTimer(100, NumarkMixTrackQuad.LOLEDsa3, true); cnt213 = cnt213 + 1; if (cnt213 > 16) { engine.stopTimer(colorTimer213); } midi.sendShortMsg(0x91, 0x6E, cnt213);}
+		engine.beginTimer(1200, () => { NumarkMixTrackQuad.LOLEDsb3(); }, true); let cnt223 = 0; NumarkMixTrackQuad.LOLEDsb3 = function() { colorTimer223 = engine.beginTimer(100, NumarkMixTrackQuad.LOLEDsb3, true); cnt223 = cnt223 + 1; if (cnt223 > 16) { engine.stopTimer(colorTimer223); } midi.sendShortMsg(0x92, 0x6E, cnt223);}
+		engine.beginTimer(1100, () => { NumarkMixTrackQuad.LOLEDsc3(); }, true); let cnt233 = 0; NumarkMixTrackQuad.LOLEDsc3 = function() { colorTimer233 = engine.beginTimer(100, NumarkMixTrackQuad.LOLEDsc3, true); cnt233 = cnt233 + 1; if (cnt233 > 16) { engine.stopTimer(colorTimer233); } midi.sendShortMsg(0x93, 0x6E, cnt233);}
+		engine.beginTimer(1200, () => { NumarkMixTrackQuad.LOLEDsd3(); }, true); let cnt243 = 0; NumarkMixTrackQuad.LOLEDsd3 = function() { colorTimer243 = engine.beginTimer(100, NumarkMixTrackQuad.LOLEDsd3, true); cnt243 = cnt243 + 1; if (cnt243 > 16) { engine.stopTimer(colorTimer243); } midi.sendShortMsg(0x94, 0x6E, cnt243);}
 
 		// Turns on Reloop LEDs lvl1
-		engine.beginTimer(1200, () => { NumarkMixTrackQuad.RLLEDsa1(); }, true); var cnt251 = 0; NumarkMixTrackQuad.RLLEDsa1 = function() { colorTimer251 = engine.beginTimer(100, NumarkMixTrackQuad.RLLEDsa1, true); cnt251 = cnt251 + 1; if (cnt251 > 16) { engine.stopTimer(colorTimer251); } midi.sendShortMsg(0x91, 0x55, cnt251);}
-		engine.beginTimer(1100, () => { NumarkMixTrackQuad.RLLEDsb1(); }, true); var cnt261 = 0; NumarkMixTrackQuad.RLLEDsb1 = function() { colorTimer261 = engine.beginTimer(100, NumarkMixTrackQuad.RLLEDsb1, true); cnt261 = cnt261 + 1; if (cnt261 > 16) { engine.stopTimer(colorTimer261); } midi.sendShortMsg(0x92, 0x55, cnt261);}
-		engine.beginTimer(1200, () => { NumarkMixTrackQuad.RLLEDsc1(); }, true); var cnt271 = 0; NumarkMixTrackQuad.RLLEDsc1 = function() { colorTimer271 = engine.beginTimer(100, NumarkMixTrackQuad.RLLEDsc1, true); cnt271 = cnt271 + 1; if (cnt271 > 16) { engine.stopTimer(colorTimer271); } midi.sendShortMsg(0x93, 0x55, cnt271);}
-		engine.beginTimer(1100, () => { NumarkMixTrackQuad.RLLEDsd1(); }, true); var cnt281 = 0; NumarkMixTrackQuad.RLLEDsd1 = function() { colorTimer281 = engine.beginTimer(100, NumarkMixTrackQuad.RLLEDsd1, true); cnt281 = cnt281 + 1; if (cnt281 > 16) { engine.stopTimer(colorTimer281); } midi.sendShortMsg(0x94, 0x55, cnt281);}
+		engine.beginTimer(1200, () => { NumarkMixTrackQuad.RLLEDsa1(); }, true); let cnt251 = 0; NumarkMixTrackQuad.RLLEDsa1 = function() { colorTimer251 = engine.beginTimer(100, NumarkMixTrackQuad.RLLEDsa1, true); cnt251 = cnt251 + 1; if (cnt251 > 16) { engine.stopTimer(colorTimer251); } midi.sendShortMsg(0x91, 0x55, cnt251);}
+		engine.beginTimer(1100, () => { NumarkMixTrackQuad.RLLEDsb1(); }, true); let cnt261 = 0; NumarkMixTrackQuad.RLLEDsb1 = function() { colorTimer261 = engine.beginTimer(100, NumarkMixTrackQuad.RLLEDsb1, true); cnt261 = cnt261 + 1; if (cnt261 > 16) { engine.stopTimer(colorTimer261); } midi.sendShortMsg(0x92, 0x55, cnt261);}
+		engine.beginTimer(1200, () => { NumarkMixTrackQuad.RLLEDsc1(); }, true); let cnt271 = 0; NumarkMixTrackQuad.RLLEDsc1 = function() { colorTimer271 = engine.beginTimer(100, NumarkMixTrackQuad.RLLEDsc1, true); cnt271 = cnt271 + 1; if (cnt271 > 16) { engine.stopTimer(colorTimer271); } midi.sendShortMsg(0x93, 0x55, cnt271);}
+		engine.beginTimer(1100, () => { NumarkMixTrackQuad.RLLEDsd1(); }, true); let cnt281 = 0; NumarkMixTrackQuad.RLLEDsd1 = function() { colorTimer281 = engine.beginTimer(100, NumarkMixTrackQuad.RLLEDsd1, true); cnt281 = cnt281 + 1; if (cnt281 > 16) { engine.stopTimer(colorTimer281); } midi.sendShortMsg(0x94, 0x55, cnt281);}
 		// Turns on Reloop LEDs lvl2 S3
-		engine.beginTimer(1200, () => { NumarkMixTrackQuad.RLLEDsa2(); }, true); var cnt252 = 0; NumarkMixTrackQuad.RLLEDsa2 = function() { colorTimer252 = engine.beginTimer(100, NumarkMixTrackQuad.RLLEDsa2, true); cnt252 = cnt252 + 1; if (cnt252 > 16) { engine.stopTimer(colorTimer252); } midi.sendShortMsg(0x91, 0x67, cnt252);}
-		engine.beginTimer(1100, () => { NumarkMixTrackQuad.RLLEDsb2(); }, true); var cnt262 = 0; NumarkMixTrackQuad.RLLEDsb2 = function() { colorTimer262 = engine.beginTimer(100, NumarkMixTrackQuad.RLLEDsb2, true); cnt262 = cnt262 + 1; if (cnt262 > 16) { engine.stopTimer(colorTimer262); } midi.sendShortMsg(0x92, 0x67, cnt262);}
-		engine.beginTimer(1200, () => { NumarkMixTrackQuad.RLLEDsc2(); }, true); var cnt272 = 0; NumarkMixTrackQuad.RLLEDsc2 = function() { colorTimer272 = engine.beginTimer(100, NumarkMixTrackQuad.RLLEDsc2, true); cnt272 = cnt272 + 1; if (cnt272 > 16) { engine.stopTimer(colorTimer272); } midi.sendShortMsg(0x93, 0x67, cnt272);}
-		engine.beginTimer(1100, () => { NumarkMixTrackQuad.RLLEDsd2(); }, true); var cnt282 = 0; NumarkMixTrackQuad.RLLEDsd2 = function() { colorTimer282 = engine.beginTimer(100, NumarkMixTrackQuad.RLLEDsd2, true); cnt282 = cnt282 + 1; if (cnt282 > 16) { engine.stopTimer(colorTimer282); } midi.sendShortMsg(0x94, 0x67, cnt282);}
+		engine.beginTimer(1200, () => { NumarkMixTrackQuad.RLLEDsa2(); }, true); let cnt252 = 0; NumarkMixTrackQuad.RLLEDsa2 = function() { colorTimer252 = engine.beginTimer(100, NumarkMixTrackQuad.RLLEDsa2, true); cnt252 = cnt252 + 1; if (cnt252 > 16) { engine.stopTimer(colorTimer252); } midi.sendShortMsg(0x91, 0x67, cnt252);}
+		engine.beginTimer(1100, () => { NumarkMixTrackQuad.RLLEDsb2(); }, true); let cnt262 = 0; NumarkMixTrackQuad.RLLEDsb2 = function() { colorTimer262 = engine.beginTimer(100, NumarkMixTrackQuad.RLLEDsb2, true); cnt262 = cnt262 + 1; if (cnt262 > 16) { engine.stopTimer(colorTimer262); } midi.sendShortMsg(0x92, 0x67, cnt262);}
+		engine.beginTimer(1200, () => { NumarkMixTrackQuad.RLLEDsc2(); }, true); let cnt272 = 0; NumarkMixTrackQuad.RLLEDsc2 = function() { colorTimer272 = engine.beginTimer(100, NumarkMixTrackQuad.RLLEDsc2, true); cnt272 = cnt272 + 1; if (cnt272 > 16) { engine.stopTimer(colorTimer272); } midi.sendShortMsg(0x93, 0x67, cnt272);}
+		engine.beginTimer(1100, () => { NumarkMixTrackQuad.RLLEDsd2(); }, true); let cnt282 = 0; NumarkMixTrackQuad.RLLEDsd2 = function() { colorTimer282 = engine.beginTimer(100, NumarkMixTrackQuad.RLLEDsd2, true); cnt282 = cnt282 + 1; if (cnt282 > 16) { engine.stopTimer(colorTimer282); } midi.sendShortMsg(0x94, 0x67, cnt282);}
 		// Turns on Reloop LEDs lvl3 C3
-		engine.beginTimer(1200, () => { NumarkMixTrackQuad.RLLEDsa3(); }, true); var cnt253 = 0; NumarkMixTrackQuad.RLLEDsa3 = function() { colorTimer253 = engine.beginTimer(100, NumarkMixTrackQuad.RLLEDsa3, true); cnt253 = cnt253 + 1; if (cnt253 > 16) { engine.stopTimer(colorTimer253); } midi.sendShortMsg(0x91, 0x6F, cnt253);}
-		engine.beginTimer(1100, () => { NumarkMixTrackQuad.RLLEDsb3(); }, true); var cnt263 = 0; NumarkMixTrackQuad.RLLEDsb3 = function() { colorTimer263 = engine.beginTimer(100, NumarkMixTrackQuad.RLLEDsb3, true); cnt263 = cnt263 + 1; if (cnt263 > 16) { engine.stopTimer(colorTimer263); } midi.sendShortMsg(0x92, 0x6F, cnt263);}
-		engine.beginTimer(1200, () => { NumarkMixTrackQuad.RLLEDsc3(); }, true); var cnt273 = 0; NumarkMixTrackQuad.RLLEDsc3 = function() { colorTimer273 = engine.beginTimer(100, NumarkMixTrackQuad.RLLEDsc3, true); cnt273 = cnt273 + 1; if (cnt273 > 16) { engine.stopTimer(colorTimer273); } midi.sendShortMsg(0x93, 0x6F, cnt273);}
-		engine.beginTimer(1100, () => { NumarkMixTrackQuad.RLLEDsd3(); }, true); var cnt283 = 0; NumarkMixTrackQuad.RLLEDsd3 = function() { colorTimer283 = engine.beginTimer(100, NumarkMixTrackQuad.RLLEDsd3, true); cnt283 = cnt283 + 1; if (cnt283 > 16) { engine.stopTimer(colorTimer283); } midi.sendShortMsg(0x94, 0x6F, cnt283);}
+		engine.beginTimer(1200, () => { NumarkMixTrackQuad.RLLEDsa3(); }, true); let cnt253 = 0; NumarkMixTrackQuad.RLLEDsa3 = function() { colorTimer253 = engine.beginTimer(100, NumarkMixTrackQuad.RLLEDsa3, true); cnt253 = cnt253 + 1; if (cnt253 > 16) { engine.stopTimer(colorTimer253); } midi.sendShortMsg(0x91, 0x6F, cnt253);}
+		engine.beginTimer(1100, () => { NumarkMixTrackQuad.RLLEDsb3(); }, true); let cnt263 = 0; NumarkMixTrackQuad.RLLEDsb3 = function() { colorTimer263 = engine.beginTimer(100, NumarkMixTrackQuad.RLLEDsb3, true); cnt263 = cnt263 + 1; if (cnt263 > 16) { engine.stopTimer(colorTimer263); } midi.sendShortMsg(0x92, 0x6F, cnt263);}
+		engine.beginTimer(1200, () => { NumarkMixTrackQuad.RLLEDsc3(); }, true); let cnt273 = 0; NumarkMixTrackQuad.RLLEDsc3 = function() { colorTimer273 = engine.beginTimer(100, NumarkMixTrackQuad.RLLEDsc3, true); cnt273 = cnt273 + 1; if (cnt273 > 16) { engine.stopTimer(colorTimer273); } midi.sendShortMsg(0x93, 0x6F, cnt273);}
+		engine.beginTimer(1100, () => { NumarkMixTrackQuad.RLLEDsd3(); }, true); let cnt283 = 0; NumarkMixTrackQuad.RLLEDsd3 = function() { colorTimer283 = engine.beginTimer(100, NumarkMixTrackQuad.RLLEDsd3, true); cnt283 = cnt283 + 1; if (cnt283 > 16) { engine.stopTimer(colorTimer283); } midi.sendShortMsg(0x94, 0x6F, cnt283);}
 
 		// Turns on Loop_Size LEDs lvl1
-		engine.beginTimer(1300, () => { NumarkMixTrackQuad.LSLEDsa1(); }, true); var cnt291 = 0; NumarkMixTrackQuad.LSLEDsa1 = function() { colorTimer291 = engine.beginTimer(100, NumarkMixTrackQuad.LSLEDsa1, true); cnt291 = cnt291 + 1; if (cnt291 > 16) { engine.stopTimer(colorTimer291); } midi.sendShortMsg(0x91, 0x63, cnt291);}
-		engine.beginTimer(1000, () => { NumarkMixTrackQuad.LSLEDsb1(); }, true); var cnt301 = 0; NumarkMixTrackQuad.LSLEDsb1 = function() { colorTimer301 = engine.beginTimer(100, NumarkMixTrackQuad.LSLEDsb1, true); cnt301 = cnt301 + 1; if (cnt301 > 16) { engine.stopTimer(colorTimer301); } midi.sendShortMsg(0x92, 0x63, cnt301);}
-		engine.beginTimer(1300, () => { NumarkMixTrackQuad.LSLEDsc1(); }, true); var cnt311 = 0; NumarkMixTrackQuad.LSLEDsc1 = function() { colorTimer311 = engine.beginTimer(100, NumarkMixTrackQuad.LSLEDsc1, true); cnt311 = cnt311 + 1; if (cnt311 > 16) { engine.stopTimer(colorTimer311); } midi.sendShortMsg(0x93, 0x63, cnt311);}
-		engine.beginTimer(1000, () => { NumarkMixTrackQuad.LSLEDsd1(); }, true); var cnt321 = 0; NumarkMixTrackQuad.LSLEDsd1 = function() { colorTimer321 = engine.beginTimer(100, NumarkMixTrackQuad.LSLEDsd1, true); cnt321 = cnt321 + 1; if (cnt321 > 16) { engine.stopTimer(colorTimer321); } midi.sendShortMsg(0x94, 0x63, cnt321);}
+		engine.beginTimer(1300, () => { NumarkMixTrackQuad.LSLEDsa1(); }, true); let cnt291 = 0; NumarkMixTrackQuad.LSLEDsa1 = function() { colorTimer291 = engine.beginTimer(100, NumarkMixTrackQuad.LSLEDsa1, true); cnt291 = cnt291 + 1; if (cnt291 > 16) { engine.stopTimer(colorTimer291); } midi.sendShortMsg(0x91, 0x63, cnt291);}
+		engine.beginTimer(1000, () => { NumarkMixTrackQuad.LSLEDsb1(); }, true); let cnt301 = 0; NumarkMixTrackQuad.LSLEDsb1 = function() { colorTimer301 = engine.beginTimer(100, NumarkMixTrackQuad.LSLEDsb1, true); cnt301 = cnt301 + 1; if (cnt301 > 16) { engine.stopTimer(colorTimer301); } midi.sendShortMsg(0x92, 0x63, cnt301);}
+		engine.beginTimer(1300, () => { NumarkMixTrackQuad.LSLEDsc1(); }, true); let cnt311 = 0; NumarkMixTrackQuad.LSLEDsc1 = function() { colorTimer311 = engine.beginTimer(100, NumarkMixTrackQuad.LSLEDsc1, true); cnt311 = cnt311 + 1; if (cnt311 > 16) { engine.stopTimer(colorTimer311); } midi.sendShortMsg(0x93, 0x63, cnt311);}
+		engine.beginTimer(1000, () => { NumarkMixTrackQuad.LSLEDsd1(); }, true); let cnt321 = 0; NumarkMixTrackQuad.LSLEDsd1 = function() { colorTimer321 = engine.beginTimer(100, NumarkMixTrackQuad.LSLEDsd1, true); cnt321 = cnt321 + 1; if (cnt321 > 16) { engine.stopTimer(colorTimer321); } midi.sendShortMsg(0x94, 0x63, cnt321);}
 		// Turns on Loop_Size LEDs lvl2 S4
-		engine.beginTimer(1300, () => { NumarkMixTrackQuad.LSLEDsa2(); }, true); var cnt292 = 0; NumarkMixTrackQuad.LSLEDsa2 = function() { colorTimer292 = engine.beginTimer(100, NumarkMixTrackQuad.LSLEDsa2, true); cnt292 = cnt292 + 1; if (cnt292 > 16) { engine.stopTimer(colorTimer292); } midi.sendShortMsg(0x91, 0x68, cnt292);}
-		engine.beginTimer(1000, () => { NumarkMixTrackQuad.LSLEDsb2(); }, true); var cnt302 = 0; NumarkMixTrackQuad.LSLEDsb2 = function() { colorTimer302 = engine.beginTimer(100, NumarkMixTrackQuad.LSLEDsb2, true); cnt302 = cnt302 + 1; if (cnt302 > 16) { engine.stopTimer(colorTimer302); } midi.sendShortMsg(0x92, 0x68, cnt302);}
-		engine.beginTimer(1300, () => { NumarkMixTrackQuad.LSLEDsc2(); }, true); var cnt312 = 0; NumarkMixTrackQuad.LSLEDsc2 = function() { colorTimer312 = engine.beginTimer(100, NumarkMixTrackQuad.LSLEDsc2, true); cnt312 = cnt312 + 1; if (cnt312 > 16) { engine.stopTimer(colorTimer312); } midi.sendShortMsg(0x93, 0x68, cnt312);}
-		engine.beginTimer(1000, () => { NumarkMixTrackQuad.LSLEDsd2(); }, true); var cnt322 = 0; NumarkMixTrackQuad.LSLEDsd2 = function() { colorTimer322 = engine.beginTimer(100, NumarkMixTrackQuad.LSLEDsd2, true); cnt322 = cnt322 + 1; if (cnt322 > 16) { engine.stopTimer(colorTimer322); } midi.sendShortMsg(0x94, 0x68, cnt322);}
+		engine.beginTimer(1300, () => { NumarkMixTrackQuad.LSLEDsa2(); }, true); let cnt292 = 0; NumarkMixTrackQuad.LSLEDsa2 = function() { colorTimer292 = engine.beginTimer(100, NumarkMixTrackQuad.LSLEDsa2, true); cnt292 = cnt292 + 1; if (cnt292 > 16) { engine.stopTimer(colorTimer292); } midi.sendShortMsg(0x91, 0x68, cnt292);}
+		engine.beginTimer(1000, () => { NumarkMixTrackQuad.LSLEDsb2(); }, true); let cnt302 = 0; NumarkMixTrackQuad.LSLEDsb2 = function() { colorTimer302 = engine.beginTimer(100, NumarkMixTrackQuad.LSLEDsb2, true); cnt302 = cnt302 + 1; if (cnt302 > 16) { engine.stopTimer(colorTimer302); } midi.sendShortMsg(0x92, 0x68, cnt302);}
+		engine.beginTimer(1300, () => { NumarkMixTrackQuad.LSLEDsc2(); }, true); let cnt312 = 0; NumarkMixTrackQuad.LSLEDsc2 = function() { colorTimer312 = engine.beginTimer(100, NumarkMixTrackQuad.LSLEDsc2, true); cnt312 = cnt312 + 1; if (cnt312 > 16) { engine.stopTimer(colorTimer312); } midi.sendShortMsg(0x93, 0x68, cnt312);}
+		engine.beginTimer(1000, () => { NumarkMixTrackQuad.LSLEDsd2(); }, true); let cnt322 = 0; NumarkMixTrackQuad.LSLEDsd2 = function() { colorTimer322 = engine.beginTimer(100, NumarkMixTrackQuad.LSLEDsd2, true); cnt322 = cnt322 + 1; if (cnt322 > 16) { engine.stopTimer(colorTimer322); } midi.sendShortMsg(0x94, 0x68, cnt322);}
 		// Turns on Loop_Size LEDs lvl3 C4
-		engine.beginTimer(1300, () => { NumarkMixTrackQuad.LSLEDsa3(); }, true); var cnt293 = 0; NumarkMixTrackQuad.LSLEDsa3 = function() { colorTimer293 = engine.beginTimer(100, NumarkMixTrackQuad.LSLEDsa3, true); cnt293 = cnt293 + 1; if (cnt293 > 16) { engine.stopTimer(colorTimer293); } midi.sendShortMsg(0x91, 0x70, cnt293);}
-		engine.beginTimer(1000, () => { NumarkMixTrackQuad.LSLEDsb3(); }, true); var cnt303 = 0; NumarkMixTrackQuad.LSLEDsb3 = function() { colorTimer303 = engine.beginTimer(100, NumarkMixTrackQuad.LSLEDsb3, true); cnt303 = cnt303 + 1; if (cnt303 > 16) { engine.stopTimer(colorTimer303); } midi.sendShortMsg(0x92, 0x70, cnt303);}
-		engine.beginTimer(1300, () => { NumarkMixTrackQuad.LSLEDsc3(); }, true); var cnt313 = 0; NumarkMixTrackQuad.LSLEDsc3 = function() { colorTimer313 = engine.beginTimer(100, NumarkMixTrackQuad.LSLEDsc3, true); cnt313 = cnt313 + 1; if (cnt313 > 16) { engine.stopTimer(colorTimer313); } midi.sendShortMsg(0x93, 0x70, cnt313);}
-		engine.beginTimer(1000, () => { NumarkMixTrackQuad.LSLEDsd3(); }, true); var cnt323 = 0; NumarkMixTrackQuad.LSLEDsd3 = function() { colorTimer323 = engine.beginTimer(100, NumarkMixTrackQuad.LSLEDsd3, true); cnt323 = cnt323 + 1; if (cnt323 > 16) { engine.stopTimer(colorTimer323); } midi.sendShortMsg(0x94, 0x70, cnt323);}
+		engine.beginTimer(1300, () => { NumarkMixTrackQuad.LSLEDsa3(); }, true); let cnt293 = 0; NumarkMixTrackQuad.LSLEDsa3 = function() { colorTimer293 = engine.beginTimer(100, NumarkMixTrackQuad.LSLEDsa3, true); cnt293 = cnt293 + 1; if (cnt293 > 16) { engine.stopTimer(colorTimer293); } midi.sendShortMsg(0x91, 0x70, cnt293);}
+		engine.beginTimer(1000, () => { NumarkMixTrackQuad.LSLEDsb3(); }, true); let cnt303 = 0; NumarkMixTrackQuad.LSLEDsb3 = function() { colorTimer303 = engine.beginTimer(100, NumarkMixTrackQuad.LSLEDsb3, true); cnt303 = cnt303 + 1; if (cnt303 > 16) { engine.stopTimer(colorTimer303); } midi.sendShortMsg(0x92, 0x70, cnt303);}
+		engine.beginTimer(1300, () => { NumarkMixTrackQuad.LSLEDsc3(); }, true); let cnt313 = 0; NumarkMixTrackQuad.LSLEDsc3 = function() { colorTimer313 = engine.beginTimer(100, NumarkMixTrackQuad.LSLEDsc3, true); cnt313 = cnt313 + 1; if (cnt313 > 16) { engine.stopTimer(colorTimer313); } midi.sendShortMsg(0x93, 0x70, cnt313);}
+		engine.beginTimer(1000, () => { NumarkMixTrackQuad.LSLEDsd3(); }, true); let cnt323 = 0; NumarkMixTrackQuad.LSLEDsd3 = function() { colorTimer323 = engine.beginTimer(100, NumarkMixTrackQuad.LSLEDsd3, true); cnt323 = cnt323 + 1; if (cnt323 > 16) { engine.stopTimer(colorTimer323); } midi.sendShortMsg(0x94, 0x70, cnt323);}
 
 		// Turns on Folder/File LEDs
 		engine.beginTimer(3000, () => { midi.sendShortMsg(0x90, 0x4B, 1); }, true);
@@ -995,10 +1004,10 @@ NumarkMixTrackQuad.shutdown = function() {
 
 NumarkMixTrackQuad.restoreFX1LEDsState = function(){
 	if (NumarkMixTrackQuad.interuptLEDShow == 1)  {
-		var stateFX11 = engine.getValue('[EffectRack1_EffectUnit1_Effect1]', "enabled");
-		var stateFX12 = engine.getValue('[EffectRack1_EffectUnit2_Effect1]', "enabled");
-		var stateFX13 = engine.getValue('[EffectRack1_EffectUnit3_Effect1]', "enabled");
-		var stateFX14 = engine.getValue('[EffectRack1_EffectUnit4_Effect1]', "enabled");
+		let stateFX11 = engine.getValue('[EffectRack1_EffectUnit1_Effect1]', "enabled");
+		let stateFX12 = engine.getValue('[EffectRack1_EffectUnit2_Effect1]', "enabled");
+		let stateFX13 = engine.getValue('[EffectRack1_EffectUnit3_Effect1]', "enabled");
+		let stateFX14 = engine.getValue('[EffectRack1_EffectUnit4_Effect1]', "enabled");
 		if (stateFX11) { 
 			midi.sendShortMsg(0x91, 0x59, 5); // match to .xml vvv
 		} else {
@@ -1024,10 +1033,10 @@ NumarkMixTrackQuad.restoreFX1LEDsState = function(){
 
 NumarkMixTrackQuad.restoreFX2LEDsState = function(){
 	if (NumarkMixTrackQuad.interuptLEDShow == 1)  {
-		var stateFX21 = engine.getValue('[EffectRack1_EffectUnit1_Effect2]', "enabled");
-		var stateFX22 = engine.getValue('[EffectRack1_EffectUnit2_Effect2]', "enabled");
-		var stateFX23 = engine.getValue('[EffectRack1_EffectUnit3_Effect2]', "enabled");
-		var stateFX24 = engine.getValue('[EffectRack1_EffectUnit4_Effect2]', "enabled");
+		let stateFX21 = engine.getValue('[EffectRack1_EffectUnit1_Effect2]', "enabled");
+		let stateFX22 = engine.getValue('[EffectRack1_EffectUnit2_Effect2]', "enabled");
+		let stateFX23 = engine.getValue('[EffectRack1_EffectUnit3_Effect2]', "enabled");
+		let stateFX24 = engine.getValue('[EffectRack1_EffectUnit4_Effect2]', "enabled");
 		if (stateFX21) { 
 			midi.sendShortMsg(0x91, 0x5A, 5); // match to .xml vvv
 		} else {
@@ -1053,10 +1062,10 @@ NumarkMixTrackQuad.restoreFX2LEDsState = function(){
 
 NumarkMixTrackQuad.restoreFX3LEDsState = function(){
 	if (NumarkMixTrackQuad.interuptLEDShow == 1)  {
-		var stateFX31 = engine.getValue('[EffectRack1_EffectUnit1_Effect3]', "enabled");
-		var stateFX32 = engine.getValue('[EffectRack1_EffectUnit2_Effect3]', "enabled");
-		var stateFX33 = engine.getValue('[EffectRack1_EffectUnit3_Effect3]', "enabled");
-		var stateFX34 = engine.getValue('[EffectRack1_EffectUnit4_Effect3]', "enabled");
+		let stateFX31 = engine.getValue('[EffectRack1_EffectUnit1_Effect3]', "enabled");
+		let stateFX32 = engine.getValue('[EffectRack1_EffectUnit2_Effect3]', "enabled");
+		let stateFX33 = engine.getValue('[EffectRack1_EffectUnit3_Effect3]', "enabled");
+		let stateFX34 = engine.getValue('[EffectRack1_EffectUnit4_Effect3]', "enabled");
 		if (stateFX31) { 
 			midi.sendShortMsg(0x91, 0x5B, 5); // match to .xml vvv
 		} else {
@@ -1082,10 +1091,10 @@ NumarkMixTrackQuad.restoreFX3LEDsState = function(){
 
 NumarkMixTrackQuad.restoreFXRLEDsState = function(){
 	if (NumarkMixTrackQuad.interuptLEDShow == 1)  {
-		var stateFXR1 = engine.getValue('[EffectRack1_EffectUnit1]', "group_[Channel1]_enable");
-		var stateFXR2 = engine.getValue('[EffectRack1_EffectUnit2]', "group_[Channel2]_enable");
-		var stateFXR3 = engine.getValue('[EffectRack1_EffectUnit3]', "group_[Channel3]_enable");
-		var stateFXR4 = engine.getValue('[EffectRack1_EffectUnit4]', "group_[Channel4]_enable");
+		let stateFXR1 = engine.getValue('[EffectRack1_EffectUnit1]', "group_[Channel1]_enable");
+		let stateFXR2 = engine.getValue('[EffectRack1_EffectUnit2]', "group_[Channel2]_enable");
+		let stateFXR3 = engine.getValue('[EffectRack1_EffectUnit3]', "group_[Channel3]_enable");
+		let stateFXR4 = engine.getValue('[EffectRack1_EffectUnit4]', "group_[Channel4]_enable");
 		if (stateFXR1) { 
 			midi.sendShortMsg(0x91, 0x5C, 5); // match to .xml vvv
 		} else {
@@ -1115,10 +1124,10 @@ NumarkMixTrackQuad.restoreDRLEDsState = function(){
 }
 
 NumarkMixTrackQuad.restoreHPLEDsState = function(){
-	var statePLF1 = engine.getValue('[Channel1]', "pfl");
-	var statePLF2 = engine.getValue('[Channel2]', "pfl");
-	var statePLF3 = engine.getValue('[Channel3]', "pfl");
-	var statePLF4 = engine.getValue('[Channel4]', "pfl");
+	let statePLF1 = engine.getValue('[Channel1]', "pfl");
+	let statePLF2 = engine.getValue('[Channel2]', "pfl");
+	let statePLF3 = engine.getValue('[Channel3]', "pfl");
+	let statePLF4 = engine.getValue('[Channel4]', "pfl");
 	midi.sendShortMsg(0x91, 0x47, statePLF1 );
 	midi.sendShortMsg(0x92, 0x47, statePLF2 );
 	midi.sendShortMsg(0x93, 0x47, statePLF3 );
@@ -1126,10 +1135,10 @@ NumarkMixTrackQuad.restoreHPLEDsState = function(){
 }
 
 NumarkMixTrackQuad.restoreSYLEDsState = function(){
-	var stateSYNC1 = engine.getValue('[Channel1]', "sync_enabled");
-	var stateSYNC2 = engine.getValue('[Channel2]', "sync_enabled");
-	var stateSYNC3 = engine.getValue('[Channel3]', "sync_enabled");
-	var stateSYNC4 = engine.getValue('[Channel4]', "sync_enabled");
+	let stateSYNC1 = engine.getValue('[Channel1]', "sync_enabled");
+	let stateSYNC2 = engine.getValue('[Channel2]', "sync_enabled");
+	let stateSYNC3 = engine.getValue('[Channel3]', "sync_enabled");
+	let stateSYNC4 = engine.getValue('[Channel4]', "sync_enabled");
 	midi.sendShortMsg(0x91, 0x40, stateSYNC1); 
 	midi.sendShortMsg(0x92, 0x40, stateSYNC2); 
 	midi.sendShortMsg(0x93, 0x40, stateSYNC3);
@@ -1137,10 +1146,10 @@ NumarkMixTrackQuad.restoreSYLEDsState = function(){
 }
 
 NumarkMixTrackQuad.restoreCULEDsState = function(){
-	var stateCue1 = engine.getValue('[Channel1]', "play");
-	var stateCue2 = engine.getValue('[Channel2]', "play");
-	var stateCue3 = engine.getValue('[Channel3]', "play");
-	var stateCue4 = engine.getValue('[Channel4]', "play");
+	let stateCue1 = engine.getValue('[Channel1]', "play");
+	let stateCue2 = engine.getValue('[Channel2]', "play");
+	let stateCue3 = engine.getValue('[Channel3]', "play");
+	let stateCue4 = engine.getValue('[Channel4]', "play");
 	if (stateCue1 == 1) {midi.sendShortMsg(0x91, 0x33, 0); }else { midi.sendShortMsg(0x91, 0x33, 1 );}
 	if (stateCue2 == 1) {midi.sendShortMsg(0x92, 0x33, 0); }else { midi.sendShortMsg(0x92, 0x33, 1 );}
 	if (stateCue3 == 1) {midi.sendShortMsg(0x93, 0x33, 0); }else { midi.sendShortMsg(0x93, 0x33, 1 );}
@@ -1148,10 +1157,10 @@ NumarkMixTrackQuad.restoreCULEDsState = function(){
 }
 
 NumarkMixTrackQuad.restorePLEDsState = function(){
-	var statePlay1 = engine.getValue('[Channel1]', "play");
-	var statePlay2 = engine.getValue('[Channel2]', "play");
-	var statePlay3 = engine.getValue('[Channel3]', "play");
-	var statePlay4 = engine.getValue('[Channel4]', "play");
+	let statePlay1 = engine.getValue('[Channel1]', "play");
+	let statePlay2 = engine.getValue('[Channel2]', "play");
+	let statePlay3 = engine.getValue('[Channel3]', "play");
+	let statePlay4 = engine.getValue('[Channel4]', "play");
 	midi.sendShortMsg(0x91, 0x42, statePlay1);
 	midi.sendShortMsg(0x92, 0x42, statePlay2);
 	midi.sendShortMsg(0x93, 0x42, statePlay3);
@@ -1159,6 +1168,7 @@ NumarkMixTrackQuad.restorePLEDsState = function(){
 }	
 
 NumarkMixTrackQuad.peakIndicator = function(){
+	if (!NumarkMixTrackQuad.clipIndicatorEnabled) return;
 	if (NumarkMixTrackQuad.interuptLEDShow == 1)  {
 		if (engine.getValue('[Main]', "peak_indicator") && NumarkMixTrackQuad.peakLEDShow == 0) {
 			NumarkMixTrackQuad.peakLEDShow = 1;
@@ -1222,10 +1232,10 @@ NumarkMixTrackQuad.peakIndicator = function(){
 			NumarkMixTrackQuad.peakLEDs60Timer = engine.beginTimer(60, NumarkMixTrackQuad.peakLEDs60, true);
 			NumarkMixTrackQuad.peakLEDs80Timer = engine.beginTimer(80, NumarkMixTrackQuad.peakLEDs80, true);
 		}
-		var peakLedsInd1 = engine.getValue('[Channel1]', "peak_indicator");
-		var peakLedsInd2 = engine.getValue('[Channel2]', "peak_indicator");
-		var peakLedsInd3 = engine.getValue('[Channel3]', "peak_indicator");
-		var peakLedsInd4 = engine.getValue('[Channel4]', "peak_indicator");
+		let peakLedsInd1 = engine.getValue('[Channel1]', "peak_indicator");
+		let peakLedsInd2 = engine.getValue('[Channel2]', "peak_indicator");
+		let peakLedsInd3 = engine.getValue('[Channel3]', "peak_indicator");
+		let peakLedsInd4 = engine.getValue('[Channel4]', "peak_indicator");
 		if (peakLedsInd1) {
 			midi.sendShortMsg(0x91, 0x47, 0);
 			engine.beginTimer(50, () => { midi.sendShortMsg(0x91, 0x47, 1); }, true);
@@ -1343,14 +1353,14 @@ NumarkMixTrackQuad.peakLEDsReset = function () {
 }
 
 NumarkMixTrackQuad.sync1Led = function (channel, control, value, status, group) {
-	var activebeat = engine.getValue('[Channel1]',"beat_active");
+	let activebeat = engine.getValue('[Channel1]',"beat_active");
 	if (activebeat)	{
 		midi.sendShortMsg(0x91,0x4A,1);
 	} else {
 		midi.sendShortMsg(0x91,0x4A,0);
 	}
-	var secondsBlink = 30;
-	var secondsToEnd = engine.getValue('[Channel1]', "duration") * (1-engine.getValue('[Channel1]', "playposition"));
+	const secondsBlink = 30;
+	let secondsToEnd = engine.getValue('[Channel1]', "duration") * (1-engine.getValue('[Channel1]', "playposition"));
 	if (secondsToEnd < secondsBlink && secondsToEnd > 1 && engine.getValue('[Channel1]', "play")) {
 		NumarkMixTrackQuad.flasher1 = NumarkMixTrackQuad.flasher1 + 1;
 		if (NumarkMixTrackQuad.flasher1 == 1) {
@@ -1363,14 +1373,14 @@ NumarkMixTrackQuad.sync1Led = function (channel, control, value, status, group) 
 }
 
 NumarkMixTrackQuad.sync2Led = function (channel, control, value, status, group) {
-	var activebeat = engine.getValue('[Channel2]',"beat_active");
+	let activebeat = engine.getValue('[Channel2]',"beat_active");
 	if (activebeat)	{
 		midi.sendShortMsg(0x92,0x4A,1);}
 	else {
 		midi.sendShortMsg(0x92,0x4A,0);
 	}
-	var secondsBlink = 30;
-	var secondsToEnd = engine.getValue('[Channel2]', "duration") * (1-engine.getValue('[Channel2]', "playposition"));
+	const secondsBlink = 30;
+	let secondsToEnd = engine.getValue('[Channel2]', "duration") * (1-engine.getValue('[Channel2]', "playposition"));
 	if (secondsToEnd < secondsBlink && secondsToEnd > 1 && engine.getValue('[Channel2]', "play")) {
 		NumarkMixTrackQuad.flasher2 = NumarkMixTrackQuad.flasher2 + 1;
 		if (NumarkMixTrackQuad.flasher2 == 1) {
@@ -1383,14 +1393,14 @@ NumarkMixTrackQuad.sync2Led = function (channel, control, value, status, group) 
 }
 
 NumarkMixTrackQuad.sync3Led = function (channel, control, value, status, group) {
-	var activebeat = engine.getValue('[Channel3]',"beat_active");
+	let activebeat = engine.getValue('[Channel3]',"beat_active");
 	if (activebeat)	{
 		midi.sendShortMsg(0x93,0x4A,1);}
 	else {
 		midi.sendShortMsg(0x93,0x4A,0);
 	}
-	var secondsBlink = 30;
-	var secondsToEnd = engine.getValue('[Channel3]', "duration") * (1-engine.getValue('[Channel3]', "playposition"));
+	const secondsBlink = 30;
+	let secondsToEnd = engine.getValue('[Channel3]', "duration") * (1-engine.getValue('[Channel3]', "playposition"));
 	if (secondsToEnd < secondsBlink && secondsToEnd > 1 && engine.getValue('[Channel3]', "play")) {
 		NumarkMixTrackQuad.flasher3 = NumarkMixTrackQuad.flasher3 + 1;
 		if (NumarkMixTrackQuad.flasher3 == 1) {
@@ -1403,14 +1413,14 @@ NumarkMixTrackQuad.sync3Led = function (channel, control, value, status, group) 
 }
 
 NumarkMixTrackQuad.sync4Led = function (channel, control, value, status, group) {
-	var activebeat = engine.getValue('[Channel4]',"beat_active");
+	let activebeat = engine.getValue('[Channel4]',"beat_active");
 	if (activebeat)	{
 		midi.sendShortMsg(0x94,0x4A,1);}
 	else {
 		midi.sendShortMsg(0x94,0x4A,0);
 	}
-	var secondsBlink = 30;
-	var secondsToEnd = engine.getValue('[Channel4]', "duration") * (1-engine.getValue('[Channel4]', "playposition"));
+	const secondsBlink = 30;
+	let secondsToEnd = engine.getValue('[Channel4]', "duration") * (1-engine.getValue('[Channel4]', "playposition"));
 	if (secondsToEnd < secondsBlink && secondsToEnd > 1 && engine.getValue('[Channel4]', "play")) {
 		NumarkMixTrackQuad.flasher4 = NumarkMixTrackQuad.flasher4 + 1;
 		if (NumarkMixTrackQuad.flasher4 == 1) {
@@ -1464,29 +1474,29 @@ NumarkMixTrackQuad.buttonR1LoopLeds = function (){
 NumarkMixTrackQuad.buttonR1CuesLeds = function (){
 	if (NumarkMixTrackQuad.interuptLEDShow == 1)  {
 		if (engine.getValue('[Channel1]',"hotcue_1_status")) {
-			var R1C1Col = engine.getValue('[Channel1]',"hotcue_1_color")
-			var R1C1NewCol= outputColor (R1C1Col);
+			let R1C1Col = engine.getValue('[Channel1]',"hotcue_1_color")
+			let R1C1NewCol= outputColor (R1C1Col);
 			midi.sendShortMsg(0x91, 0x6D, R1C1NewCol);
 		} else {
 			midi.sendShortMsg(0x91, 0x6D, 13);	
 		}
 		if (engine.getValue('[Channel1]',"hotcue_2_status")) {
-			var R1C2Col = engine.getValue('[Channel1]',"hotcue_2_color")
-			var R1C2NewCol= outputColor (R1C2Col);
+			let R1C2Col = engine.getValue('[Channel1]',"hotcue_2_color")
+			let R1C2NewCol= outputColor (R1C2Col);
 			midi.sendShortMsg(0x91, 0x6E, R1C2NewCol);
 		} else {
 			midi.sendShortMsg(0x91, 0x6E, 13);	
 		}
 		if (engine.getValue('[Channel1]',"hotcue_3_status")) {
-			var R1C3Col = engine.getValue('[Channel1]',"hotcue_3_color")
-			var R1C3NewCol= outputColor (R1C3Col);
+			let R1C3Col = engine.getValue('[Channel1]',"hotcue_3_color")
+			let R1C3NewCol= outputColor (R1C3Col);
 			midi.sendShortMsg(0x91, 0x6F, R1C3NewCol);
 		} else {
 			midi.sendShortMsg(0x91, 0x6F, 13);	
 		}
 		if (engine.getValue('[Channel1]',"hotcue_4_status")) {
-			var R1C4Col = engine.getValue('[Channel1]',"hotcue_4_color")
-			var R1C4NewCol= outputColor (R1C4Col);
+			let R1C4Col = engine.getValue('[Channel1]',"hotcue_4_color")
+			let R1C4NewCol= outputColor (R1C4Col);
 			midi.sendShortMsg(0x91, 0x70, R1C4NewCol);
 		} else {
 			midi.sendShortMsg(0x91, 0x70, 13);	
@@ -1593,29 +1603,29 @@ NumarkMixTrackQuad.buttonR2LoopLeds = function (){
 NumarkMixTrackQuad.buttonR2CuesLeds = function (){
 	if (NumarkMixTrackQuad.interuptLEDShow == 1)  {
 		if (engine.getValue('[Channel2]',"hotcue_1_status")) {
-			var R2C1Col = engine.getValue('[Channel2]',"hotcue_1_color")
-			var R2C1NewCol= outputColor (R2C1Col);
+			let R2C1Col = engine.getValue('[Channel2]',"hotcue_1_color")
+			let R2C1NewCol= outputColor (R2C1Col);
 			midi.sendShortMsg(0x92, 0x6D, R2C1NewCol);
 		} else {
 			midi.sendShortMsg(0x92, 0x6D, 13);	
 		}
 		if (engine.getValue('[Channel2]',"hotcue_2_status")) {
-			var R2C2Col = engine.getValue('[Channel2]',"hotcue_2_color")
-			var R2C2NewCol= outputColor (R2C2Col);
+			let R2C2Col = engine.getValue('[Channel2]',"hotcue_2_color")
+			let R2C2NewCol= outputColor (R2C2Col);
 			midi.sendShortMsg(0x92, 0x6E, R2C2NewCol);
 		} else {
 			midi.sendShortMsg(0x92, 0x6E, 13);	
 		}
 		if (engine.getValue('[Channel2]',"hotcue_3_status")) {
-			var R2C3Col = engine.getValue('[Channel2]',"hotcue_3_color")
-			var R2C3NewCol= outputColor (R2C3Col);
+			let R2C3Col = engine.getValue('[Channel2]',"hotcue_3_color")
+			let R2C3NewCol= outputColor (R2C3Col);
 			midi.sendShortMsg(0x92, 0x6F, R2C3NewCol);
 		} else {
 			midi.sendShortMsg(0x92, 0x6F, 13);	
 		}
 		if (engine.getValue('[Channel2]',"hotcue_4_status")) {
-			var R2C4Col = engine.getValue('[Channel2]',"hotcue_4_color")
-			var R2C4NewCol= outputColor (R2C4Col);
+			let R2C4Col = engine.getValue('[Channel2]',"hotcue_4_color")
+			let R2C4NewCol= outputColor (R2C4Col);
 			midi.sendShortMsg(0x92, 0x70, R2C4NewCol);
 		} else {
 			midi.sendShortMsg(0x92, 0x70, 13);	
@@ -1722,29 +1732,29 @@ NumarkMixTrackQuad.buttonR3LoopLeds = function (){
 NumarkMixTrackQuad.buttonR3CuesLeds = function (){
 	if (NumarkMixTrackQuad.interuptLEDShow == 1)  {
 		if (engine.getValue('[Channel3]',"hotcue_1_status")) {
-			var R3C1Col = engine.getValue('[Channel3]',"hotcue_1_color")
-			var R3C1NewCol= outputColor (R3C1Col);
+			let R3C1Col = engine.getValue('[Channel3]',"hotcue_1_color")
+			let R3C1NewCol= outputColor (R3C1Col);
 			midi.sendShortMsg(0x93, 0x6D, R3C1NewCol);
 		} else {
 			midi.sendShortMsg(0x93, 0x6D, 13);	
 		}
 		if (engine.getValue('[Channel3]',"hotcue_2_status")) {
-			var R3C2Col = engine.getValue('[Channel3]',"hotcue_2_color")
-			var R3C2NewCol= outputColor (R3C2Col);
+			let R3C2Col = engine.getValue('[Channel3]',"hotcue_2_color")
+			let R3C2NewCol= outputColor (R3C2Col);
 			midi.sendShortMsg(0x93, 0x6E, R3C2NewCol);
 		} else {
 			midi.sendShortMsg(0x93, 0x6E, 13);	
 		}
 		if (engine.getValue('[Channel3]',"hotcue_3_status")) {
-			var R3C3Col = engine.getValue('[Channel3]',"hotcue_3_color")
-			var R3C3NewCol= outputColor (R3C3Col);
+			let R3C3Col = engine.getValue('[Channel3]',"hotcue_3_color")
+			let R3C3NewCol= outputColor (R3C3Col);
 			midi.sendShortMsg(0x93, 0x6F, R3C3NewCol);
 		} else {
 			midi.sendShortMsg(0x93, 0x6F, 13);	
 		}
 		if (engine.getValue('[Channel3]',"hotcue_4_status")) {
-			var R3C4Col = engine.getValue('[Channel3]',"hotcue_4_color")
-			var R3C4NewCol= outputColor (R3C4Col);
+			let R3C4Col = engine.getValue('[Channel3]',"hotcue_4_color")
+			let R3C4NewCol= outputColor (R3C4Col);
 			midi.sendShortMsg(0x93, 0x70, R3C4NewCol);
 		} else {
 			midi.sendShortMsg(0x93, 0x70, 13);	
@@ -1832,7 +1842,7 @@ NumarkMixTrackQuad.buttonR4LoopLeds = function (){
 		} else {
 			midi.sendShortMsg(0x94, 0x55, 10);
 		}
-		if (NumarkMixTrackQuad.SHFTD1) {
+		if (NumarkMixTrackQuad.SHFTD4) {
 			if (engine.getValue('[Channel4]',"loop_end_position") && engine.getValue('[Channel4]',"loop_start_position")){
 				midi.sendShortMsg(0x94, 0x63, 5);
 			} else {
@@ -1851,29 +1861,29 @@ NumarkMixTrackQuad.buttonR4LoopLeds = function (){
 NumarkMixTrackQuad.buttonR4CuesLeds = function (){
 	if (NumarkMixTrackQuad.interuptLEDShow == 1)  {
 		if (engine.getValue('[Channel4]',"hotcue_1_status")) {
-			var R4C1Col = engine.getValue('[Channel4]',"hotcue_1_color")
-			var R4C1NewCol= outputColor (R4C1Col);
+			let R4C1Col = engine.getValue('[Channel4]',"hotcue_1_color")
+			let R4C1NewCol= outputColor (R4C1Col);
 			midi.sendShortMsg(0x94, 0x6D, R4C1NewCol);
 		} else {
 			midi.sendShortMsg(0x94, 0x6D, 13);	
 		}
 		if (engine.getValue('[Channel4]',"hotcue_2_status")) {
-			var R4C2Col = engine.getValue('[Channel4]',"hotcue_2_color")
-			var R4C2NewCol= outputColor (R4C2Col);
+			let R4C2Col = engine.getValue('[Channel4]',"hotcue_2_color")
+			let R4C2NewCol= outputColor (R4C2Col);
 			midi.sendShortMsg(0x94, 0x6E, R4C2NewCol);
 		} else {
 			midi.sendShortMsg(0x94, 0x6E, 13);	
 		}
 		if (engine.getValue('[Channel4]',"hotcue_3_status")) {
-			var R4C3Col = engine.getValue('[Channel4]',"hotcue_3_color")
-			var R4C3NewCol= outputColor (R4C3Col);
+			let R4C3Col = engine.getValue('[Channel4]',"hotcue_3_color")
+			let R4C3NewCol= outputColor (R4C3Col);
 			midi.sendShortMsg(0x94, 0x6F, R4C3NewCol);
 		} else {
 			midi.sendShortMsg(0x94, 0x6F, 13);	
 		}
 		if (engine.getValue('[Channel4]',"hotcue_4_status")) {
-			var R4C4Col = engine.getValue('[Channel4]',"hotcue_4_color")
-			var R4C4NewCol= outputColor (R4C4Col);
+			let R4C4Col = engine.getValue('[Channel4]',"hotcue_4_color")
+			let R4C4NewCol= outputColor (R4C4Col);
 			midi.sendShortMsg(0x94, 0x70, R4C4NewCol);
 		} else {
 			midi.sendShortMsg(0x94, 0x70, 13);	
@@ -1942,29 +1952,29 @@ NumarkMixTrackQuad.activeButtonsR1 = {}
 NumarkMixTrackQuad.unshiftedButtonsR1 = {
 	knobR1FX1 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var add = 0;
-		var oldR1FX1 = engine.getValue('[EffectRack1_EffectUnit1_Effect1]',"meta");
+		let add = 0;
+		let oldR1FX1 = engine.getValue('[EffectRack1_EffectUnit1_Effect1]',"meta");
 		if (value > 63) {add = -0.05 } else { add = 0.05 }
 		engine.setValue('[EffectRack1_EffectUnit1_Effect1]',"meta",oldR1FX1 + add);
 	},
 	knobR1FX2 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var add = 0;
-		var oldR1FX2 = engine.getValue('[EffectRack1_EffectUnit1_Effect2]',"meta");
+		let add = 0;
+		let oldR1FX2 = engine.getValue('[EffectRack1_EffectUnit1_Effect2]',"meta");
 		if (value > 63) {add = -0.05 } else { add = 0.05 }
 		engine.setValue('[EffectRack1_EffectUnit1_Effect2]',"meta",oldR1FX2 + add);
 	},
     knobR1FX3 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var add = 0;
-		var oldR1FX3 = engine.getValue('[EffectRack1_EffectUnit1_Effect3]',"meta");
+		let add = 0;
+		let oldR1FX3 = engine.getValue('[EffectRack1_EffectUnit1_Effect3]',"meta");
 		if (value > 63) {add = -0.05 } else { add = 0.05 }
 		engine.setValue('[EffectRack1_EffectUnit1_Effect3]',"meta",oldR1FX3 + add);
     },
     knobR1FXF : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var add = 0;
-		var oldFX1F = engine.getValue('[EffectRack1_EffectUnit1]',"super1");
+		let add = 0;
+		let oldFX1F = engine.getValue('[EffectRack1_EffectUnit1]',"super1");
 		if (value > 63) {add = -0.05 } else { add = 0.05 }
 		engine.setValue('[EffectRack1_EffectUnit1]',"super1",oldFX1F + add);
     },
@@ -2038,13 +2048,13 @@ NumarkMixTrackQuad.unshiftedButtonsR1 = {
     },
     buttonR1Keylock : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (value > 63) {set = 1; NumarkMixTrackQuad.reverse[deck-1] = 0.65; } else { set = 0; NumarkMixTrackQuad.reverse[deck-1] = 1;}
 		engine.setValue('[Channel1]',"rate_temp_down",set);
     },
     buttonR1Range : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (value > 63) {set = 1; NumarkMixTrackQuad.reverse[deck-1] = 1.35; } else { set = 0; NumarkMixTrackQuad.reverse[deck-1] = 1;}
 		engine.setValue('[Channel1]',"rate_temp_up",set);
     },
@@ -2067,7 +2077,7 @@ NumarkMixTrackQuad.unshiftedButtonsR1 = {
 	},
 	buttonR1C1 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (NumarkMixTrackQuad.deleteModeSwitch[deck-1] == channel) {
 			engine.setValue(group,"hotcue_1_clear",1);
 			midi.sendShortMsg((0x90 + channel ), 0x6D, 1);
@@ -2096,7 +2106,7 @@ NumarkMixTrackQuad.unshiftedButtonsR1 = {
 	},   
 	buttonR1C2 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (NumarkMixTrackQuad.deleteModeSwitch[deck-1] == channel) {
 			engine.setValue(group,"hotcue_2_clear",1);
 			midi.sendShortMsg((0x90 + channel ), 0x6E, 1);
@@ -2125,7 +2135,7 @@ NumarkMixTrackQuad.unshiftedButtonsR1 = {
 	},   
 	buttonR1C3 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (NumarkMixTrackQuad.deleteModeSwitch[deck-1] == channel) {
 			engine.setValue(group,"hotcue_3_clear",1);
 			midi.sendShortMsg((0x90 + channel ), 0x6F, 1);
@@ -2154,7 +2164,7 @@ NumarkMixTrackQuad.unshiftedButtonsR1 = {
 	},
 	buttonR1C4 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (NumarkMixTrackQuad.deleteModeSwitch[deck-1] == channel) {
 			engine.setValue(group,"hotcue_4_clear",1);
 			midi.sendShortMsg((0x90 + channel ), 0x70, 1);
@@ -2209,8 +2219,8 @@ NumarkMixTrackQuad.shiftedButtonsR1 = {
     },
     knobR1FXF : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var add = 0;
-		var oldFX1F = engine.getValue('[EffectRack1_EffectUnit1]',"mix");
+		let add = 0;
+		let oldFX1F = engine.getValue('[EffectRack1_EffectUnit1]',"mix");
 		if (value > 63) {add = -0.05 } else { add = 0.05 }
 		engine.setValue('[EffectRack1_EffectUnit1]',"mix",oldFX1F + add);
     },
@@ -2236,10 +2246,10 @@ NumarkMixTrackQuad.shiftedButtonsR1 = {
     },
     buttonR1Keylock : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (value == 127) {
 			if (!NumarkMixTrackQuad.scratchMode[deck-1]) {
-				var oldKLset = engine.getValue('[Channel1]',"keylock");
+				let oldKLset = engine.getValue('[Channel1]',"keylock");
 				if (oldKLset == 0) {set = 1 } else { set = 0 }
 				engine.setValue('[Channel1]',"keylock",set);
 			} else {
@@ -2254,7 +2264,7 @@ NumarkMixTrackQuad.shiftedButtonsR1 = {
     buttonR1Range : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
 		if (value == 127) {
-			var oldRGset = engine.getValue('[Channel1]',"rateRange");
+			let oldRGset = engine.getValue('[Channel1]',"rateRange");
 			if (oldRGset == 0.06) {
 				set = 0.08;
 			} else if (oldRGset == 0.08) {
@@ -2324,29 +2334,29 @@ NumarkMixTrackQuad.activeButtonsR2 = {}
 NumarkMixTrackQuad.unshiftedButtonsR2 = {
 	knobR2FX1 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var add = 0;
-		var oldR2FX1 = engine.getValue('[EffectRack1_EffectUnit2_Effect1]',"meta");
+		let add = 0;
+		let oldR2FX1 = engine.getValue('[EffectRack1_EffectUnit2_Effect1]',"meta");
 		if (value > 63) {add = -0.05 } else { add = 0.05 }
 		engine.setValue('[EffectRack1_EffectUnit2_Effect1]',"meta",oldR2FX1 + add);
 	},
 	knobR2FX2 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var add = 0;
-		var oldR2FX2 = engine.getValue('[EffectRack1_EffectUnit2_Effect2]',"meta");
+		let add = 0;
+		let oldR2FX2 = engine.getValue('[EffectRack1_EffectUnit2_Effect2]',"meta");
 		if (value > 63) {add = -0.05 } else { add = 0.05 }
 		engine.setValue('[EffectRack1_EffectUnit2_Effect2]',"meta",oldR2FX2 + add);
 	},
     knobR2FX3 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var add = 0;
-		var oldR2FX3 = engine.getValue('[EffectRack1_EffectUnit2_Effect3]',"meta");
+		let add = 0;
+		let oldR2FX3 = engine.getValue('[EffectRack1_EffectUnit2_Effect3]',"meta");
 		if (value > 63) {add = -0.05 } else { add = 0.05 }
 		engine.setValue('[EffectRack1_EffectUnit2_Effect3]',"meta",oldR2FX3 + add);
     },
     knobR2FXF : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var add = 0;
-		var oldFX2F = engine.getValue('[EffectRack1_EffectUnit2]',"super1");
+		let add = 0;
+		let oldFX2F = engine.getValue('[EffectRack1_EffectUnit2]',"super1");
 		if (value > 63) {add = -0.05 } else { add = 0.05 }
 		engine.setValue('[EffectRack1_EffectUnit2]',"super1",oldFX2F + add);
     },
@@ -2420,13 +2430,13 @@ NumarkMixTrackQuad.unshiftedButtonsR2 = {
     },
     buttonR2Keylock : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (value > 63) {set = 1; NumarkMixTrackQuad.reverse[deck-1] = 0.65; } else { set = 0; NumarkMixTrackQuad.reverse[deck-1] = 1;}
 		engine.setValue('[Channel2]',"rate_temp_down",set);
     },
     buttonR2Range : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (value > 63) {set = 1; NumarkMixTrackQuad.reverse[deck-1] = 1.35; } else { set = 0; NumarkMixTrackQuad.reverse[deck-1] = 1;}
 		engine.setValue('[Channel2]',"rate_temp_up",set);
     },
@@ -2449,7 +2459,7 @@ NumarkMixTrackQuad.unshiftedButtonsR2 = {
 	},
 	buttonR2C1 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (NumarkMixTrackQuad.deleteModeSwitch[deck-1] == channel) {
 			engine.setValue(group,"hotcue_1_clear",1);
 			midi.sendShortMsg((0x90 + channel ), 0x6D, 1);
@@ -2478,7 +2488,7 @@ NumarkMixTrackQuad.unshiftedButtonsR2 = {
 	},   
 	buttonR2C2 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (NumarkMixTrackQuad.deleteModeSwitch[deck-1] == channel) {
 			engine.setValue(group,"hotcue_2_clear",1);
 			midi.sendShortMsg((0x90 + channel ), 0x6E, 1);
@@ -2507,7 +2517,7 @@ NumarkMixTrackQuad.unshiftedButtonsR2 = {
 	},   
 	buttonR2C3 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (NumarkMixTrackQuad.deleteModeSwitch[deck-1] == channel) {
 			engine.setValue(group,"hotcue_3_clear",1);
 			midi.sendShortMsg((0x90 + channel ), 0x6F, 1);
@@ -2536,7 +2546,7 @@ NumarkMixTrackQuad.unshiftedButtonsR2 = {
 	},
 	buttonR2C4 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (NumarkMixTrackQuad.deleteModeSwitch[deck-1] == channel) {
 			engine.setValue(group,"hotcue_4_clear",1);
 			midi.sendShortMsg((0x90 + channel ), 0x70, 1);
@@ -2591,8 +2601,8 @@ NumarkMixTrackQuad.shiftedButtonsR2 = {
     },
     knobR2FXF : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var add = 0;
-		var oldFX2F = engine.getValue('[EffectRack1_EffectUnit2]',"mix");
+		let add = 0;
+		let oldFX2F = engine.getValue('[EffectRack1_EffectUnit2]',"mix");
 		if (value > 63) {add = -0.05 } else { add = 0.05 }
 		engine.setValue('[EffectRack1_EffectUnit2]',"mix",oldFX2F + add);
     },
@@ -2618,10 +2628,10 @@ NumarkMixTrackQuad.shiftedButtonsR2 = {
     },
     buttonR2Keylock : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (value == 127) {
 			if (!NumarkMixTrackQuad.scratchMode[deck-1]) {
-				var oldKLset = engine.getValue('[Channel2]',"keylock");
+				let oldKLset = engine.getValue('[Channel2]',"keylock");
 				if (oldKLset == 0) {set = 1 } else { set = 0 }
 				engine.setValue('[Channel2]',"keylock",set);
 			} else {
@@ -2636,7 +2646,7 @@ NumarkMixTrackQuad.shiftedButtonsR2 = {
     buttonR2Range : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
 		if (value == 127) {
-			var oldRGset = engine.getValue('[Channel2]',"rateRange");
+			let oldRGset = engine.getValue('[Channel2]',"rateRange");
 			if (oldRGset == 0.06) {
 				set = 0.08;
 			} else if (oldRGset == 0.08) {
@@ -2675,7 +2685,7 @@ NumarkMixTrackQuad.shiftedButtonsR2 = {
 	buttonR2C4 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
 		if (value > 63) {
-			if (engine.getValue('[Channel1]',"hotcue_1_status") || engine.getValue('[Channel1]',"hotcue_2_status") || engine.getValue('[Channel1]',"hotcue_3_status") || engine.getValue('[Channel1]',"hotcue_4_status")) {
+			if (engine.getValue('[Channel2]',"hotcue_1_status") || engine.getValue('[Channel2]',"hotcue_2_status") || engine.getValue('[Channel2]',"hotcue_3_status") || engine.getValue('[Channel2]',"hotcue_4_status")) {
 				NumarkMixTrackQuad.deleteMode(group, channel)
 				midi.sendShortMsg(0x92, 0x70, 1);
 			}
@@ -2706,29 +2716,29 @@ NumarkMixTrackQuad.activeButtonsR3 = {}
 NumarkMixTrackQuad.unshiftedButtonsR3 = {
 	knobR3FX1 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var add = 0;
-		var oldR3FX1 = engine.getValue('[EffectRack1_EffectUnit3_Effect1]',"meta");
+		let add = 0;
+		let oldR3FX1 = engine.getValue('[EffectRack1_EffectUnit3_Effect1]',"meta");
 		if (value > 63) {add = -0.05 } else { add = 0.05 }
 		engine.setValue('[EffectRack1_EffectUnit3_Effect1]',"meta",oldR3FX1 + add);
 	},
 	knobR3FX2 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var add = 0;
-		var oldR3FX2 = engine.getValue('[EffectRack1_EffectUnit3_Effect2]',"meta");
+		let add = 0;
+		let oldR3FX2 = engine.getValue('[EffectRack1_EffectUnit3_Effect2]',"meta");
 		if (value > 63) {add = -0.05 } else { add = 0.05 }
 		engine.setValue('[EffectRack1_EffectUnit3_Effect2]',"meta",oldR3FX2 + add);
 	},
     knobR3FX3 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var add = 0;
-		var oldR3FX3 = engine.getValue('[EffectRack1_EffectUnit3_Effect3]',"meta");
+		let add = 0;
+		let oldR3FX3 = engine.getValue('[EffectRack1_EffectUnit3_Effect3]',"meta");
 		if (value > 63) {add = -0.05 } else { add = 0.05 }
 		engine.setValue('[EffectRack1_EffectUnit3_Effect3]',"meta",oldR3FX3 + add);
     },
     knobR3FXF : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var add = 0;
-		var oldFX3F = engine.getValue('[EffectRack1_EffectUnit3]',"super1");
+		let add = 0;
+		let oldFX3F = engine.getValue('[EffectRack1_EffectUnit3]',"super1");
 		if (value > 63) {add = -0.05 } else { add = 0.05 }
 		engine.setValue('[EffectRack1_EffectUnit3]',"super1",oldFX3F + add);
     },
@@ -2802,13 +2812,13 @@ NumarkMixTrackQuad.unshiftedButtonsR3 = {
     },
     buttonR3Keylock : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (value > 63) {set = 1; NumarkMixTrackQuad.reverse[deck-1] = 0.65; } else { set = 0; NumarkMixTrackQuad.reverse[deck-1] = 1;}
 		engine.setValue('[Channel3]',"rate_temp_down",set);
     },
     buttonR3Range : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (value > 63) {set = 1; NumarkMixTrackQuad.reverse[deck-1] = 1.35; } else { set = 0; NumarkMixTrackQuad.reverse[deck-1] = 1;}
 		engine.setValue('[Channel3]',"rate_temp_up",set);
     },
@@ -2831,7 +2841,7 @@ NumarkMixTrackQuad.unshiftedButtonsR3 = {
 	},
 	buttonR3C1 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (NumarkMixTrackQuad.deleteModeSwitch[deck-1] == channel) {
 			engine.setValue(group,"hotcue_1_clear",1);
 			midi.sendShortMsg((0x90 + channel ), 0x6D, 1);
@@ -2860,7 +2870,7 @@ NumarkMixTrackQuad.unshiftedButtonsR3 = {
 	},   
 	buttonR3C2 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (NumarkMixTrackQuad.deleteModeSwitch[deck-1] == channel) {
 			engine.setValue(group,"hotcue_2_clear",1);
 			midi.sendShortMsg((0x90 + channel ), 0x6E, 1);
@@ -2889,7 +2899,7 @@ NumarkMixTrackQuad.unshiftedButtonsR3 = {
 	},   
 	buttonR3C3 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (NumarkMixTrackQuad.deleteModeSwitch[deck-1] == channel) {
 			engine.setValue(group,"hotcue_3_clear",1);
 			midi.sendShortMsg((0x90 + channel ), 0x6F, 1);
@@ -2918,7 +2928,7 @@ NumarkMixTrackQuad.unshiftedButtonsR3 = {
 	},
 	buttonR3C4 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (NumarkMixTrackQuad.deleteModeSwitch[deck-1] == channel) {
 			engine.setValue(group,"hotcue_4_clear",1);
 			midi.sendShortMsg((0x90 + channel ), 0x70, 1);
@@ -2973,8 +2983,8 @@ NumarkMixTrackQuad.shiftedButtonsR3 = {
     },
     knobR3FXF : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var add = 0;
-		var oldFX3F = engine.getValue('[EffectRack1_EffectUnit3]',"mix");
+		let add = 0;
+		let oldFX3F = engine.getValue('[EffectRack1_EffectUnit3]',"mix");
 		if (value > 63) {add = -0.05 } else { add = 0.05 }
 		engine.setValue('[EffectRack1_EffectUnit3]',"mix",oldFX3F + add);
     },
@@ -3000,10 +3010,10 @@ NumarkMixTrackQuad.shiftedButtonsR3 = {
     },
     buttonR3Keylock : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (value == 127) {
 			if (!NumarkMixTrackQuad.scratchMode[deck-1]) {
-				var oldKLset = engine.getValue('[Channel3]',"keylock");
+				let oldKLset = engine.getValue('[Channel3]',"keylock");
 				if (oldKLset == 0) {set = 1 } else { set = 0 }
 				engine.setValue('[Channel3]',"keylock",set);
 			} else {
@@ -3018,7 +3028,7 @@ NumarkMixTrackQuad.shiftedButtonsR3 = {
     buttonR3Range : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
 		if (value == 127) {
-			var oldRGset = engine.getValue('[Channel3]',"rateRange");
+			let oldRGset = engine.getValue('[Channel3]',"rateRange");
 			if (oldRGset == 0.06) {
 				set = 0.08;
 			} else if (oldRGset == 0.08) {
@@ -3057,7 +3067,7 @@ NumarkMixTrackQuad.shiftedButtonsR3 = {
 	buttonR3C4 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
 		if (value > 63) {
-			if (engine.getValue('[Channel1]',"hotcue_1_status") || engine.getValue('[Channel1]',"hotcue_2_status") || engine.getValue('[Channel1]',"hotcue_3_status") || engine.getValue('[Channel1]',"hotcue_4_status")) {
+			if (engine.getValue('[Channel3]',"hotcue_1_status") || engine.getValue('[Channel3]',"hotcue_2_status") || engine.getValue('[Channel3]',"hotcue_3_status") || engine.getValue('[Channel3]',"hotcue_4_status")) {
 				NumarkMixTrackQuad.deleteMode(group, channel)
 				midi.sendShortMsg(0x93, 0x70, 1);
 			}
@@ -3088,29 +3098,29 @@ NumarkMixTrackQuad.activeButtonsR4 = {}
 NumarkMixTrackQuad.unshiftedButtonsR4 = {
 	knobR4FX1 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var add = 0;
-		var oldR4FX1 = engine.getValue('[EffectRack1_EffectUnit4_Effect1]',"meta");
+		let add = 0;
+		let oldR4FX1 = engine.getValue('[EffectRack1_EffectUnit4_Effect1]',"meta");
 		if (value > 63) {add = -0.05 } else { add = 0.05 }
 		engine.setValue('[EffectRack1_EffectUnit4_Effect1]',"meta",oldR4FX1 + add);
 	},
 	knobR4FX2 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var add = 0;
-		var oldR4FX2 = engine.getValue('[EffectRack1_EffectUnit4_Effect2]',"meta");
+		let add = 0;
+		let oldR4FX2 = engine.getValue('[EffectRack1_EffectUnit4_Effect2]',"meta");
 		if (value > 63) {add = -0.05 } else { add = 0.05 }
 		engine.setValue('[EffectRack1_EffectUnit4_Effect2]',"meta",oldR4FX2 + add);
 	},
     knobR4FX3 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var add = 0;
-		var oldR4FX3 = engine.getValue('[EffectRack1_EffectUnit4_Effect3]',"meta");
+		let add = 0;
+		let oldR4FX3 = engine.getValue('[EffectRack1_EffectUnit4_Effect3]',"meta");
 		if (value > 63) {add = -0.05 } else { add = 0.05 }
 		engine.setValue('[EffectRack1_EffectUnit4_Effect3]',"meta",oldR4FX3 + add);
     },
     knobR4FXF : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var add = 0;
-		var oldFX4F = engine.getValue('[EffectRack1_EffectUnit4]',"super1");
+		let add = 0;
+		let oldFX4F = engine.getValue('[EffectRack1_EffectUnit4]',"super1");
 		if (value > 63) {add = -0.05 } else { add = 0.05 }
 		engine.setValue('[EffectRack1_EffectUnit4]',"super1",oldFX4F + add);
     },
@@ -3184,13 +3194,13 @@ NumarkMixTrackQuad.unshiftedButtonsR4 = {
     },
     buttonR4Keylock : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (value > 63) {set = 1; NumarkMixTrackQuad.reverse[deck-1] = 0.65; } else { set = 0; NumarkMixTrackQuad.reverse[deck-1] = 1;}
 		engine.setValue('[Channel4]',"rate_temp_down",set);
     },
     buttonR4Range : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (value > 63) {set = 1; NumarkMixTrackQuad.reverse[deck-1] = 1.35; } else { set = 0; NumarkMixTrackQuad.reverse[deck-1] = 1;}
 		engine.setValue('[Channel4]',"rate_temp_up",set);
     },
@@ -3213,7 +3223,7 @@ NumarkMixTrackQuad.unshiftedButtonsR4 = {
 	},
 	buttonR4C1 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (NumarkMixTrackQuad.deleteModeSwitch[deck-1] == channel) {
 			engine.setValue(group,"hotcue_1_clear",1);
 			midi.sendShortMsg((0x90 + channel ), 0x6D, 1);
@@ -3242,7 +3252,7 @@ NumarkMixTrackQuad.unshiftedButtonsR4 = {
 	},   
 	buttonR4C2 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (NumarkMixTrackQuad.deleteModeSwitch[deck-1] == channel) {
 			engine.setValue(group,"hotcue_2_clear",1);
 			midi.sendShortMsg((0x90 + channel ), 0x6E, 1);
@@ -3271,7 +3281,7 @@ NumarkMixTrackQuad.unshiftedButtonsR4 = {
 	},   
 	buttonR4C3 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (NumarkMixTrackQuad.deleteModeSwitch[deck-1] == channel) {
 			engine.setValue(group,"hotcue_3_clear",1);
 			midi.sendShortMsg((0x90 + channel ), 0x6F, 1);
@@ -3300,7 +3310,7 @@ NumarkMixTrackQuad.unshiftedButtonsR4 = {
 	},
 	buttonR4C4 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (NumarkMixTrackQuad.deleteModeSwitch[deck-1] == channel) {
 			engine.setValue(group,"hotcue_4_clear",1);
 			midi.sendShortMsg((0x90 + channel ), 0x70, 1);
@@ -3355,8 +3365,8 @@ NumarkMixTrackQuad.shiftedButtonsR4 = {
     },
     knobR4FXF : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var add = 0;
-		var oldFX4F = engine.getValue('[EffectRack1_EffectUnit4]',"mix");
+		let add = 0;
+		let oldFX4F = engine.getValue('[EffectRack1_EffectUnit4]',"mix");
 		if (value > 63) {add = -0.05 } else { add = 0.05 }
 		engine.setValue('[EffectRack1_EffectUnit4]',"mix",oldFX4F + add);
     },
@@ -3382,10 +3392,10 @@ NumarkMixTrackQuad.shiftedButtonsR4 = {
     },
     buttonR4Keylock : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
-		var deck = NumarkMixTrackQuad.groupToDeck(group);
+		let deck = NumarkMixTrackQuad.groupToDeck(group);
 		if (value == 127) {
 			if (!NumarkMixTrackQuad.scratchMode[deck-1]) {
-				var oldKLset = engine.getValue('[Channel4]',"keylock");
+				let oldKLset = engine.getValue('[Channel4]',"keylock");
 				if (oldKLset == 0) {set = 1 } else { set = 0 }
 				engine.setValue('[Channel4]',"keylock",set);
 			} else {
@@ -3400,7 +3410,7 @@ NumarkMixTrackQuad.shiftedButtonsR4 = {
     buttonR4Range : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
 		if (value == 127) {
-			var oldRGset = engine.getValue('[Channel4]',"rateRange");
+			let oldRGset = engine.getValue('[Channel4]',"rateRange");
 			if (oldRGset == 0.06) {
 				set = 0.08;
 			} else if (oldRGset == 0.08) {
@@ -3439,7 +3449,7 @@ NumarkMixTrackQuad.shiftedButtonsR4 = {
 	buttonR4C4 : function (channel, control, value, status, group) {
 		NumarkMixTrackQuad.untouched = -3;
 		if (value > 63) {
-			if (engine.getValue('[Channel1]',"hotcue_1_status") || engine.getValue('[Channel1]',"hotcue_2_status") || engine.getValue('[Channel1]',"hotcue_3_status") || engine.getValue('[Channel1]',"hotcue_4_status")) {
+			if (engine.getValue('[Channel4]',"hotcue_1_status") || engine.getValue('[Channel4]',"hotcue_2_status") || engine.getValue('[Channel4]',"hotcue_3_status") || engine.getValue('[Channel4]',"hotcue_4_status")) {
 				NumarkMixTrackQuad.deleteMode(group, channel)
 				midi.sendShortMsg(0x94, 0x70, 1);
 			}
@@ -3483,7 +3493,7 @@ NumarkMixTrackQuad.buttonLayer = function (channel, control, value, status, grou
 
 NumarkMixTrackQuad.deleteMode = function(group, channel) {
 	NumarkMixTrackQuad.untouched = -3;
-	var deck = NumarkMixTrackQuad.groupToDeck(group);
+	let deck = NumarkMixTrackQuad.groupToDeck(group);
 	if (NumarkMixTrackQuad.deleteModeSwitch[deck-1] != channel) {
 		NumarkMixTrackQuad.deleteModeSwitch[deck-1] = channel
 		if ( engine.getValue(group,"hotcue_1_status")) { 

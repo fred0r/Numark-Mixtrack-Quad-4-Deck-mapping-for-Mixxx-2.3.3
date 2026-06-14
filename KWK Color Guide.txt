@@ -54,10 +54,10 @@ The 0x05 above is the color green when the app and pad is in the off position
 
 Apply the codes from the above colors list but beware.
 If you change the colors in the .xml you may also have to change colors in the .js
-At the bottom of the NumarkMixTrackQuad.lightShow function after line 600 
+At the bottom of the NumarkMixTrackQuad.lightShow function (around line 1100 in Complex, 920 in Basic)
 Look for:
 	// Sets Reset LEDs to match .xml
-	engine.beginTimer(4400, "midi.sendShortMsg(0x91, 0x5C, 5)", true);
+	midi.sendShortMsg(0x91, 0x5C, 5); // match to .xml
 The 5 above is the color green
 
 It will be best if the color matches after the intro so youre all ready to dj

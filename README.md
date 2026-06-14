@@ -1,5 +1,5 @@
-- Numark Mixtrack Quad 4 Deck Mapping & Basic Script for Mixxx 2.3.3 By DJ KWKSND
-- Updated Complex version for Mixxx 2.4 finally
+- Numark Mixtrack Quad 4 Deck Mapping for Mixxx 2.5+ (by DJ KWKSND, modernized)
+- Supported Mixxx versions: 2.5+
 - Based on Mixxx default controller settings, Numark Mixtrack Mapping, and Numark Mixtrack Pro Script
 -
 - 1/11/2010 - v0.1 - Matteo <matteo@magm3.com>
@@ -18,13 +18,13 @@
 - I hope many people get to enjoy this wonderful controller for years to come without being robbed by VDJ
 -
 - Updated on 3/11/2025 by DJ KWKSND (changed a bunch of code to bring it up to date and stop error spam
-- Due to the massive amount of changes i decided to drop support for the basic script. 
+- Basic and Complex scripts are both maintained and updated together.
 - Yes there is still some errors on startup and during jogwheel use i cant fix due to very short timers
 - but the script works perfectly and the error spam wall in console is mostly gone)
 - 
 - Whats new?
--  There is now 3 versions, Basic (the old easy controls), and Complex (more like the manual describes) for 2.3.3
--  And also a new updated for 2025 version of the complex scripts for Mixxx 2.4 
+-  There is now 2 versions, Basic (the old easy controls), and Complex (more like the manual describes)
+-  Both scripts target Mixxx 2.5+ and use the latest API
 -  Incorrectly mapped buttons were found and fixed
 -  Samples S1 - S3 repeat as you tap the pad, S4 starts / stops the sample, great for drum loops set on repeat
 -  FX123 & Filter knob speed is fixed
@@ -54,6 +54,20 @@
 -  Stutter flashes the BPM and Cue flashes to indicate 30 seconds from end of track
 -  And finally i get to announce all jogwheel LEDs now work without having to press play on the controller :D
 -  Hit play on the controller, or with the mouse on the Mixxx app, or let AutoDJ do it for you it all works YES!!!
+-
+- Updated on 6/14/2026 (modernized API and added user settings)
+- - Fixed trailing spaces in Range button XML key names (Basic + Complex, all 4 decks, Range buttons were completely dead)
+- - Fixed comma operator misuse in engine.getValue() reverse checks (22 occurrences in both JS files, reverse/jogwheel LED direction was always taking the wrong branch)
+- - Fixed copy-paste errors (SHFTD1->SHFTD4 in buttonR4LoopLeds, [Channel1]->[Channels 2/3/4] in shifted hotcue delete handlers in Complex JS)
+- - Fixed reloop LED output tracking reloop_exit instead of reloop_toggle (Complex XML, LED feedback was wrong)
+- - Fixed channel peak indicator control name (Basic JS, "PeakIndicator"->"peak_indicator", channel clipping LEDs were silently broken)
+- - Fixed deprecated engine.connectControl and [Master] group name (Basic JS, now uses makeConnection and [Main])
+- - Declared SHFTD1-4 and MVolUp with let to prevent global leaks (Basic JS)
+- - Removed trailing whitespace in timer callback strings (Basic JS)
+- - Modernized both scripts with consistent API: var->let/const, [Master]->[Main], engine.softTakeover() for 4 channel volumes
+- - Simplified gain() in both scripts to remove manual clamping
+- - Converted ~230 string timer callbacks to arrow functions in Basic script
+- - Added 4 user-configurable settings (AutoDJ On Startup, Light Show Enabled, Idle Timeout minutes, Clip Indicator Enabled)
 -
 - Features:
 -  Supports 4 decks
